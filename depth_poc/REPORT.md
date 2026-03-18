@@ -70,7 +70,9 @@ NYU Depth v2 (BTS subset):
 | Model | RMSE | abs_rel | a1 (δ<1.25) | Train time |
 |-------|------|---------|-------------|------------|
 | DINOv3 ViT-B/16 (teacher) | **0.425** | **0.112** | **0.881** | 3.5 min |
-| CanViT-B (5 random glimpses) | 0.499 | 0.139 | 0.826 | ~12 min |
+| CanViT-B (5t train, random eval) | 0.499 | 0.139 | 0.826 | ~12 min |
+| CanViT-B (5t train, C2F t=5) | 0.487 | 0.139 | 0.830 | — |
+| CanViT-B (10t train, C2F t=20) | **0.473** | **0.128** | **0.846** | ~25 min |
 | DINOv3 paper (proper eval) | 0.356 | — | — | — |
 
 ### Analysis
@@ -104,11 +106,24 @@ Unlike ADE20K segmentation (which improves through t=20), depth is a more
 "global" task — coarse scene structure captured in early views suffices.
 Additional fine-grained views don't add depth information.
 
+### Effect of training timesteps on temporal generalization
+
+| t | RMSE (5t train) | RMSE (10t train) |
+|---|-----------------|------------------|
+| 0 | 0.518 | 0.521 |
+| 5 | 0.487 | 0.484 |
+| 10 | 0.486 | 0.479 |
+| 20 | 0.487 | **0.473** |
+
+**Critical finding**: The 5t probe saturates at t=5, but the 10t probe keeps improving
+through t=20. More training timesteps teach the probe to use longer-horizon canvas
+information. Best RMSE improves from 0.487 → 0.473 (11% gap to teacher, down from 15%).
+
 ### Follow-up experiments (TODO)
 
-- [ ] C2F viewpoints during training (may reduce instability)
 - [ ] Proper Eigen crop + TTA for fair comparison to DINOv3 paper numbers
 - [ ] Full 38.4k training with augmentation on Nibi
+- [ ] More training timesteps (match ADE20K's T≈10)
 - [ ] Per-timestep CanViT evaluation with different policies (F2C, constant)
 - [ ] Higher resolution (1024px / c64) — does it help for depth?
 
