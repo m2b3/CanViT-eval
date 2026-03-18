@@ -240,20 +240,29 @@ def train(cfg: Config) -> None:
 
     cfg.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Comet (optional — runs offline if no API key) ──
+    # ── Comet ──
     import comet_ml
 
+    # Resolve API key: env var > ~/comet_api_key.txt > offline fallback.
+    api_key = os.environ.get("COMET_API_KEY")
+    if not api_key:
+        key_file = Path.home() / "comet_api_key.txt"
+        if key_file.exists():
+            api_key = key_file.read_text().strip()
+
     ts = time.strftime("%Y%m%d_%H%M%S")
-    exp_name = f"depth_{cfg.mode}_s{cfg.scene_size}_{ts}"
-    if os.environ.get("COMET_API_KEY"):
-        exp = comet_ml.Experiment(project_name=cfg.comet_project, workspace=cfg.comet_workspace)
+    exp_name = f"depth_{cfg.mode}_s{cfg.scene_size}_lr{cfg.lr}_{ts}"
+    if api_key:
+        exp = comet_ml.Experiment(api_key=api_key, project_name=cfg.comet_project, workspace=cfg.comet_workspace)
     else:
-        log.warning("COMET_API_KEY not set — logging offline only")
+        log.warning("No Comet API key found — logging offline only")
         exp = comet_ml.OfflineExperiment(project_name=cfg.comet_project, offline_directory=str(cfg.ckpt_dir))
     exp.set_name(exp_name)
     exp.log_parameters(asdict(cfg))
     exp.add_tag("depth-poc")
     exp.add_tag(cfg.mode)
+    exp.add_tag(f"s{cfg.scene_size}")
+    exp.add_tag(f"lr{cfg.lr}")
     amp_ctx = torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=cfg.amp)
     best_rmse = float("inf")
     feat_h = cfg.scene_size // 16 if cfg.mode == "teacher" else cfg.canvas_grid
