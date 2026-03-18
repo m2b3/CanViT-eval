@@ -94,6 +94,8 @@ def main(cfg: EvalConfig) -> None:
 
     for images, depths in tqdm(test_loader, desc="Eval"):
         images, depths = images.to(device), depths.to(device)
+        if depths.ndim == 4:
+            depths = depths.squeeze(1)
         B = images.shape[0]
 
         # Eigen crop mask for metrics.

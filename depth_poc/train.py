@@ -178,20 +178,23 @@ def evaluate(
     for batch in loader:
         images, depths = batch
         images, depths = images.to(device), depths.to(device)
+        # DINOv3 eval transforms: depth is [B, 1, H, W] at native resolution (480×640).
+        if depths.ndim == 4:
+            depths = depths.squeeze(1)  # → [B, H, W]
         with amp_ctx:
             if cfg.mode == "teacher":
                 feats = extract_teacher_features(backbone, images)
             else:
                 feats = extract_canvit_features(backbone, images, cfg)[-1]
             pred = probe(feats.float())
-        pred = F.interpolate(pred, size=depths.shape[-2:], mode="bilinear", align_corners=False)
+        # Upsample prediction to depth's native resolution for metrics.
+        pred = F.interpolate(pred, size=depths.shape[-2:], mode="bilinear", align_corners=False).squeeze(1)
         pred = pred.clamp(MIN_DEPTH, MAX_DEPTH)
 
         # Eigen crop mask: standard NYU eval protocol.
-        eigen_mask = make_valid_mask(depths.unsqueeze(1), eval_crop=_EvalCropType.NYU_EIGEN)
-        eigen_mask = eigen_mask.squeeze(1)  # [B, H, W]
+        eigen_mask = make_valid_mask(depths.unsqueeze(1), eval_crop=_EvalCropType.NYU_EIGEN).squeeze(1)
 
-        m = calculate_depth_metrics(depths, pred.squeeze(1), eigen_mask)
+        m = calculate_depth_metrics(depths, pred, eigen_mask)
         for field in ("rmse", "abs_rel", "a1"):
             v = getattr(m, field)
             sums[field] = sums.get(field, 0.0) + (v.item() if isinstance(v, Tensor) else float(v))
@@ -307,6 +310,9 @@ def train(cfg: Config) -> None:
             train_iter = iter(train_loader)
             images, depths = next(train_iter)
         images, depths = images.to(device), depths.to(device)
+        # DINOv3 transforms return depth as [B, 1, H, W]; squeeze to [B, H, W].
+        if depths.ndim == 4:
+            depths = depths.squeeze(1)
 
         # Downsample depth to feature resolution for loss.
         depth_low = F.interpolate(
