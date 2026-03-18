@@ -28,7 +28,7 @@ and ImageNet-1K classification.
 
 ### DINOv3 ViT-B/16 Reference Numbers
 - Paper reports RMSE only (Table in Appendix D.2)
-- ViT-B/16: **0.356 RMSE** on NYU (linear probe)
+- ViT-B/16: **0.373 RMSE** on NYU (linear probe, from MODEL_CARD.md)
 
 ## Our POC Approach
 
@@ -74,7 +74,7 @@ NYU Depth v2 (BTS subset):
 | CanViT-B (5t, random eval) | 10k | 0.499 | 0.139 | 0.826 |
 | CanViT-B (5t, C2F eval t=5) | 10k | 0.487 | 0.139 | 0.830 |
 | **CanViT-B (10t, C2F eval t=20)** | 10k | **0.473** | **0.128** | **0.846** |
-| DINOv3 paper (proper eval) | 38.4k | 0.356 | — | — |
+| DINOv3 paper ViT-B/16 (proper eval) | 38.4k | 0.373 | — | — |
 
 ### Analysis
 
@@ -85,10 +85,11 @@ NYU Depth v2 (BTS subset):
 - CanViT training shows more instability (RMSE bounces 0.50–0.57) — random viewpoints
   introduce stochasticity. C2F viewpoints or more timesteps may help.
 - Our simplified eval (no Eigen crop, no TTA) explains the gap vs DINOv3's
-  reported 0.356. Adding proper eval could bring both numbers down.
+  reported 0.373. Adding proper eval could bring both numbers down proportionally.
 - **Depth estimation is viable as a third downstream task.**
-- Full teacher training (38.4k steps): RMSE 0.412. Remaining gap to DINOv3 paper (0.356)
+- Full teacher training (38.4k steps): RMSE 0.412. Gap to DINOv3 paper's 0.373
   is from eval simplifications (no Eigen crop, no TTA, 512² square, minimal augmentation).
+- **No active vision model (AME, AdaGlimpse) evaluates depth.** Only passive teacher comparison exists.
 
 ### Per-timestep results (C2F policy, 21 timesteps)
 
