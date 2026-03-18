@@ -304,6 +304,7 @@ def train(cfg: Config) -> None:
                     old.unlink()
                 path = cfg.ckpt_dir / f"best_rmse{best_rmse:.4f}_step{step}.pt"
                 torch.save({"step": step, "probe": probe.state_dict(), "metrics": metrics, "config": asdict(cfg)}, path)
+                exp.log_model(f"best_probe", str(path))
                 log.info(f"  → new best: {path.name}")
                 exp.log_metric("test/best_rmse", best_rmse, step=step)
             probe.train()
@@ -334,7 +335,9 @@ def train(cfg: Config) -> None:
             exp.log_metrics({"train/loss": loss.item(), "lr": sched.get_last_lr()[0]}, step=step)
 
     pbar.close()
-    torch.save({"step": step, "probe": probe.state_dict(), "config": asdict(cfg)}, cfg.ckpt_dir / f"final_step{step}.pt")
+    final_path = cfg.ckpt_dir / f"final_step{step}.pt"
+    torch.save({"step": step, "probe": probe.state_dict(), "config": asdict(cfg)}, final_path)
+    exp.log_model("final_probe", str(final_path))
     log.info(f"Done. Best test RMSE: {best_rmse:.4f}")
     exp.end()
 
