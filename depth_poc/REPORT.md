@@ -67,13 +67,14 @@ NYU Depth v2 (BTS subset):
 
 10k steps, batch 4, 512×512, no augmentation, no Eigen crop, no TTA.
 
-| Model | RMSE | abs_rel | a1 (δ<1.25) | Train time |
-|-------|------|---------|-------------|------------|
-| DINOv3 ViT-B/16 (teacher) | **0.425** | **0.112** | **0.881** | 3.5 min |
-| CanViT-B (5t train, random eval) | 0.499 | 0.139 | 0.826 | ~12 min |
-| CanViT-B (5t train, C2F t=5) | 0.487 | 0.139 | 0.830 | — |
-| CanViT-B (10t train, C2F t=20) | **0.473** | **0.128** | **0.846** | ~25 min |
-| DINOv3 paper (proper eval) | 0.356 | — | — | — |
+| Model | Steps | RMSE | abs_rel | a1 (δ<1.25) |
+|-------|-------|------|---------|-------------|
+| DINOv3 teacher (10k, POC) | 10k | 0.425 | 0.112 | 0.881 |
+| **DINOv3 teacher (38.4k, full)** | 38.4k | **0.412** | **0.111** | **0.889** |
+| CanViT-B (5t, random eval) | 10k | 0.499 | 0.139 | 0.826 |
+| CanViT-B (5t, C2F eval t=5) | 10k | 0.487 | 0.139 | 0.830 |
+| **CanViT-B (10t, C2F eval t=20)** | 10k | **0.473** | **0.128** | **0.846** |
+| DINOv3 paper (proper eval) | 38.4k | 0.356 | — | — |
 
 ### Analysis
 
@@ -86,6 +87,8 @@ NYU Depth v2 (BTS subset):
 - Our simplified eval (no Eigen crop, no TTA) explains the gap vs DINOv3's
   reported 0.356. Adding proper eval could bring both numbers down.
 - **Depth estimation is viable as a third downstream task.**
+- Full teacher training (38.4k steps): RMSE 0.412. Remaining gap to DINOv3 paper (0.356)
+  is from eval simplifications (no Eigen crop, no TTA, 512² square, minimal augmentation).
 
 ### Per-timestep results (C2F policy, 21 timesteps)
 
