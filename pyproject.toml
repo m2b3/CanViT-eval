@@ -13,6 +13,8 @@ dependencies = [
     "tqdm>=4.60.0",
     "huggingface-hub>=0.20.0",
     "safetensors>=0.4.0",
+    "dinov3",
+    "comet-ml>=3.30.0",
 ]
 
 [build-system]
@@ -42,3 +44,4 @@ line-length = 120
 [tool.uv.sources]
 canvit = { git = "ssh://git@github.com/yberreby/CanViT-PyTorch-Next.git", branch = "main" }
 canvit-probes = { git = "ssh://git@github.com/m2b3/CanViT-probes.git", branch = "main" }
+dinov3 = { git = "https://github.com/yberreby/dinov3.git" }
