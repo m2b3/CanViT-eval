@@ -188,7 +188,7 @@ def evaluate(
             pred = probe(feats.float())
         pred = F.interpolate(pred, size=depths.shape[-2:], mode="bilinear", align_corners=False).squeeze(1)
         pred = pred.clamp(MIN_DEPTH, MAX_DEPTH)
-        m = calculate_depth_metrics(depths, pred, valid.unsqueeze(1))
+        m = calculate_depth_metrics(depths, pred, valid)
         for field in ("rmse", "abs_rel", "a1"):
             v = getattr(m, field)
             sums[field] = sums.get(field, 0.0) + (v.item() if isinstance(v, Tensor) else float(v))
