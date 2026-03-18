@@ -238,6 +238,8 @@ def train(cfg: Config) -> None:
     n_params = sum(p.numel() for p in probe.parameters())
     log.info(f"Probe: {n_params:,} params, {cfg.n_bins} bins, embed_dim={embed_dim}")
 
+    cfg.ckpt_dir.mkdir(parents=True, exist_ok=True)
+
     # ── Comet (optional — runs offline if no API key) ──
     import comet_ml
 
@@ -252,8 +254,6 @@ def train(cfg: Config) -> None:
     exp.log_parameters(asdict(cfg))
     exp.add_tag("depth-poc")
     exp.add_tag(cfg.mode)
-
-    cfg.ckpt_dir.mkdir(parents=True, exist_ok=True)
     amp_ctx = torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=cfg.amp)
     best_rmse = float("inf")
     feat_h = cfg.scene_size // 16 if cfg.mode == "teacher" else cfg.canvas_grid
