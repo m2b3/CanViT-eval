@@ -16,7 +16,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
-import comet_ml
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -237,10 +238,17 @@ def train(cfg: Config) -> None:
     n_params = sum(p.numel() for p in probe.parameters())
     log.info(f"Probe: {n_params:,} params, {cfg.n_bins} bins, embed_dim={embed_dim}")
 
-    # ── Comet ──
-    exp = comet_ml.Experiment(project_name=cfg.comet_project, workspace=cfg.comet_workspace)
+    # ── Comet (optional — runs offline if no API key) ──
+    import comet_ml
+
     ts = time.strftime("%Y%m%d_%H%M%S")
-    exp.set_name(f"depth_{cfg.mode}_s{cfg.scene_size}_{ts}")
+    exp_name = f"depth_{cfg.mode}_s{cfg.scene_size}_{ts}"
+    if os.environ.get("COMET_API_KEY"):
+        exp = comet_ml.Experiment(project_name=cfg.comet_project, workspace=cfg.comet_workspace)
+    else:
+        log.warning("COMET_API_KEY not set — logging offline only")
+        exp = comet_ml.OfflineExperiment(project_name=cfg.comet_project, offline_directory=str(cfg.ckpt_dir))
+    exp.set_name(exp_name)
     exp.log_parameters(asdict(cfg))
     exp.add_tag("depth-poc")
     exp.add_tag(cfg.mode)
