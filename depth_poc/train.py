@@ -1,7 +1,13 @@
 """NYU Depth v2 linear depth probe — DINOv3 teacher & CanViT features.
 
-Standalone POC for the paper. Reuses dinov3 loss/metrics. Designed for
-eventual integration into canvit-probes.
+Standalone POC for the paper. Reuses dinov3 loss, metrics, transforms,
+and bin-to-depth conversion. Designed for eventual integration into
+canvit-probes.
+
+Training protocol matches DINOv3 Appendix D.2 except:
+- Square resize to scene_size (DINOv3 uses native 480×640 aspect ratio)
+- Single GPU batch 4 (DINOv3 uses 2×8 GPUs = effective batch 16)
+- LR should be scaled accordingly (linear scaling: lr ∝ batch_size)
 
 Usage (teacher baseline):
     uv run python depth_poc/train.py --nyu-root /datasets/NYU/nyu
@@ -11,20 +17,21 @@ Usage (CanViT features):
 """
 
 import logging
+import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
-import os
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import tyro
+from dinov3.eval.depth.datasets.datasets_utils import _EvalCropType, make_valid_mask
 from dinov3.eval.depth.loss import SigLoss
 from dinov3.eval.depth.metrics import calculate_depth_metrics
 from dinov3.eval.depth.models import FeaturesToDepth
+from dinov3.eval.depth.transforms import make_depth_eval_transforms, make_depth_train_transforms
 from torch import Tensor
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
@@ -35,12 +42,9 @@ from depth_poc.dataset import NYUDepthV2
 
 log = logging.getLogger(__name__)
 
-# ── Constants ─────────────────────────────────────────────────────────
-
-IMAGENET_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_STD = (0.229, 0.224, 0.225)
 MIN_DEPTH = 0.001
 MAX_DEPTH = 10.0
+NYU_DEPTH_NORMALIZATION = 1000.0  # uint16 → meters
 
 
 # ── Config ────────────────────────────────────────────────────────────
@@ -121,17 +125,12 @@ class DepthProbe(nn.Module):
 
 
 # ── Feature extraction ────────────────────────────────────────────────
-
-
-def _normalize(images: Tensor) -> Tensor:
-    mean = images.new_tensor(IMAGENET_MEAN).view(1, 3, 1, 1)
-    std = images.new_tensor(IMAGENET_STD).view(1, 3, 1, 1)
-    return (images - mean) / std
+# NOTE: images arrive already ImageNet-normalized from the transforms.
 
 
 def extract_teacher_features(teacher: nn.Module, images: Tensor) -> Tensor:
     """DINOv3 ViT → [B, H, W, D] spatial patch features."""
-    feats = teacher.forward_norm_features(_normalize(images))
+    feats = teacher.forward_norm_features(images)
     B, N, D = feats.patches.shape
     H = W = int(N**0.5)
     assert H * W == N, f"Non-square patch grid: {N}"
@@ -145,16 +144,15 @@ def extract_canvit_features(
     from canvit import sample_at_viewpoint
     from canvit.policies import random_viewpoints
 
-    images_norm = _normalize(images)
-    B = images_norm.shape[0]
-    device = images_norm.device
+    B = images.shape[0]
+    device = images.device
 
     vps = random_viewpoints(B, device, cfg.n_timesteps, min_scale=0.05, max_scale=1.0, start_with_full_scene=True)
     state = model.init_state(batch_size=B, canvas_grid_size=cfg.canvas_grid)
 
     out_list: list[Tensor] = []
     for vp in vps:
-        glimpse = sample_at_viewpoint(spatial=images_norm, viewpoint=vp, glimpse_size_px=cfg.glimpse_px)
+        glimpse = sample_at_viewpoint(spatial=images, viewpoint=vp, glimpse_size_px=cfg.glimpse_px)
         out = model(glimpse=glimpse, state=state, viewpoint=vp)
         state = out.state
         out_list.append(model.get_spatial(state.canvas).view(B, cfg.canvas_grid, cfg.canvas_grid, -1))
@@ -173,22 +171,27 @@ def evaluate(
     device: torch.device,
     amp_ctx: torch.amp.autocast,
 ) -> dict[str, float]:
-    """Run test set, return averaged depth metrics."""
+    """Run test set with Eigen crop mask, return averaged depth metrics."""
     probe.eval()
     sums: dict[str, float] = {}
     n = 0
-    for images, depths in loader:
+    for batch in loader:
+        images, depths = batch
         images, depths = images.to(device), depths.to(device)
-        valid = (depths > MIN_DEPTH) & (depths < MAX_DEPTH)
         with amp_ctx:
             if cfg.mode == "teacher":
                 feats = extract_teacher_features(backbone, images)
             else:
                 feats = extract_canvit_features(backbone, images, cfg)[-1]
             pred = probe(feats.float())
-        pred = F.interpolate(pred, size=depths.shape[-2:], mode="bilinear", align_corners=False).squeeze(1)
+        pred = F.interpolate(pred, size=depths.shape[-2:], mode="bilinear", align_corners=False)
         pred = pred.clamp(MIN_DEPTH, MAX_DEPTH)
-        m = calculate_depth_metrics(depths, pred, valid)
+
+        # Eigen crop mask: standard NYU eval protocol.
+        eigen_mask = make_valid_mask(depths.unsqueeze(1), eval_crop=_EvalCropType.NYU_EIGEN)
+        eigen_mask = eigen_mask.squeeze(1)  # [B, H, W]
+
+        m = calculate_depth_metrics(depths, pred.squeeze(1), eigen_mask)
         for field in ("rmse", "abs_rel", "a1"):
             v = getattr(m, field)
             sums[field] = sums.get(field, 0.0) + (v.item() if isinstance(v, Tensor) else float(v))
@@ -205,12 +208,36 @@ def train(cfg: Config) -> None:
     device = torch.device(cfg.device)
 
     log.info("=" * 60)
-    log.info(f"NYU Depth v2 POC — mode={cfg.mode}, scene={cfg.scene_size}")
+    log.info(f"NYU Depth v2 POC — mode={cfg.mode}, scene={cfg.scene_size}, lr={cfg.lr}")
     log.info("=" * 60)
 
+    # ── Transforms (from dinov3) ──
+    # Training: NYU crop → resize to square → to tensor → normalize depth
+    #   → random rotation → random flip → random crop → color aug → ImageNet normalize.
+    # Eval: no crop → to tensor → resize → ImageNet normalize → normalize depth.
+    s = cfg.scene_size
+    train_tf = make_depth_train_transforms(
+        normalization_constant=NYU_DEPTH_NORMALIZATION,
+        img_size=(s, s),
+        random_crop_size=(s, s),  # no spatial crop (same as resize); augmentation comes from rotation+flip+color
+        fixed_crop="NYU",
+        brightness_range=(0.75, 1.25),  # DINOv3 NYU config
+    )
+    eval_tf = make_depth_eval_transforms(
+        normalization_constant=NYU_DEPTH_NORMALIZATION,
+        img_size=(s, s),
+        fixed_crop="FULL",
+        tta=False,
+    )
+
+    # eval_tf returns ([image], [depth]) due to LeftRightFlipAug — unwrap.
+    def eval_transform(img, depth):
+        images, depths = eval_tf(img, depth)
+        return images[0], depths[0]
+
     # ── Data ──
-    train_ds = NYUDepthV2(cfg.nyu_root, "train", cfg.scene_size)
-    test_ds = NYUDepthV2(cfg.nyu_root, "test", cfg.scene_size)
+    train_ds = NYUDepthV2(cfg.nyu_root, "train", transform=train_tf)
+    test_ds = NYUDepthV2(cfg.nyu_root, "test", transform=eval_transform)
     log.info(f"Train: {len(train_ds)}, Test: {len(test_ds)}")
     train_loader = DataLoader(
         train_ds, cfg.batch_size, shuffle=True,
@@ -243,7 +270,6 @@ def train(cfg: Config) -> None:
     # ── Comet ──
     import comet_ml
 
-    # Resolve API key: env var > ~/comet_api_key.txt > offline fallback.
     api_key = os.environ.get("COMET_API_KEY")
     if not api_key:
         key_file = Path.home() / "comet_api_key.txt"
@@ -263,6 +289,8 @@ def train(cfg: Config) -> None:
     exp.add_tag(cfg.mode)
     exp.add_tag(f"s{cfg.scene_size}")
     exp.add_tag(f"lr{cfg.lr}")
+    exp.add_tag("eigen-crop")
+    exp.add_tag("dinov3-transforms")
     amp_ctx = torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=cfg.amp)
     best_rmse = float("inf")
     feat_h = cfg.scene_size // 16 if cfg.mode == "teacher" else cfg.canvas_grid
@@ -273,18 +301,12 @@ def train(cfg: Config) -> None:
     pbar = tqdm(total=cfg.max_steps, desc="Training")
 
     while step < cfg.max_steps:
-        # Get batch.
         try:
             images, depths = next(train_iter)
         except StopIteration:
             train_iter = iter(train_loader)
             images, depths = next(train_iter)
         images, depths = images.to(device), depths.to(device)
-
-        # Random horizontal flip (joint).
-        if torch.rand(1).item() > 0.5:
-            images = images.flip(-1)
-            depths = depths.flip(-1)
 
         # Downsample depth to feature resolution for loss.
         depth_low = F.interpolate(
@@ -304,7 +326,7 @@ def train(cfg: Config) -> None:
                     old.unlink()
                 path = cfg.ckpt_dir / f"best_rmse{best_rmse:.4f}_step{step}.pt"
                 torch.save({"step": step, "probe": probe.state_dict(), "metrics": metrics, "config": asdict(cfg)}, path)
-                exp.log_model(f"best_probe", str(path))
+                exp.log_model("best_probe", str(path))
                 log.info(f"  → new best: {path.name}")
                 exp.log_metric("test/best_rmse", best_rmse, step=step)
             probe.train()
@@ -313,7 +335,7 @@ def train(cfg: Config) -> None:
         with amp_ctx:
             if cfg.mode == "teacher":
                 feats = extract_teacher_features(backbone, images)
-                pred = probe(feats.float()).squeeze(1)  # [B, feat_h, feat_h]
+                pred = probe(feats.float()).squeeze(1)
                 loss = criterion(pred, depth_low, valid_low)
             else:
                 feats_per_t = extract_canvit_features(backbone, images, cfg)
