@@ -1,17 +1,13 @@
-"""NYU Depth v2 linear depth probe — DINOv3 teacher & CanViT features.
+"""NYU Depth v2 linear depth probe.
 
-Standalone POC for the paper. Reuses dinov3 loss, metrics, transforms,
-scheduler, and bin-to-depth conversion.
+Trains a linear depth probe on frozen DINOv3 or CanViT features.
+Everything except the dataset class and feature extraction is imported
+from the dinov3 codebase: transforms, loss, metrics, scheduler, bin
+conversion. Source: dinov3/eval/depth/configs/config-nyu.yaml.
 
-Probe architecture matches DINOv3 Appendix D.2: linear classifier (BN + Conv1x1)
-on frozen patch features after LN. Loss, metrics, transforms imported from
-the dinov3 codebase (config-nyu.yaml). Steps scaled to match their epoch count.
-Only deviation: square resize (DINOv3 uses native 480×640 aspect ratio).
+Only deviation: square resize (DINOv3 uses native 480×640).
 
-Usage (teacher baseline):
     uv run python depth_poc/train.py --nyu-root /datasets/NYU/nyu
-
-Usage (CanViT features):
     uv run python depth_poc/train.py --mode canvit --nyu-root /datasets/NYU/nyu
 """
 
@@ -41,59 +37,51 @@ from depth_poc.dataset import NYUDepthV2
 
 log = logging.getLogger(__name__)
 
+# All from config-nyu.yaml unless noted.
 MIN_DEPTH = 0.001
 MAX_DEPTH = 10.0
-NYU_DEPTH_NORMALIZATION = 1000.0  # uint16 → meters
-
-
-# ── Config ────────────────────────────────────────────────────────────
-
-
+N_BINS = 256
+DEPTH_NORM = 1000.0  # uint16 → meters
+BRIGHTNESS_RANGE = (0.75, 1.25)
 NYU_TRAIN_SIZE = 24231
+# DINOv3 config: batch 2 × 8 GPUs = 16, lr 3e-4, 38400 steps = 25 epochs.
+DINOV3_BATCH = 16
+DINOV3_LR = 3e-4
+DINOV3_EPOCHS = 25
 
 
 @dataclass
 class Config:
     mode: Literal["teacher", "canvit"] = "teacher"
     nyu_root: Path = Path("/datasets/NYU/nyu")
-    scene_size: int = 512
 
-    # Model repos.
+    scene_size: int = 512
+    crop_size: int = 560  # resize here, then random-crop to scene_size during training
+
     model_repo: str = "canvit/canvitb16-add-vpe-pretrain-g128px-s512px-in21k-dv3b16-2026-02-02"
     teacher_repo: str = "facebook/dinov3-vitb16-pretrain-lvd1689m"
 
-    # Probe.
-    n_bins: int = 256
+    n_bins: int = N_BINS
     dropout: float = 0.1
 
-    # Training — defaults match DINOv3 Appendix D.2, epoch-scaled for batch 4.
-    # DINOv3: 38.4k steps × batch 16 = 25 epochs. Ours: 151k steps × batch 4 = 25 epochs.
-    # LR: DINOv3 uses 3e-4 for batch 16. Linear scaling → 7.5e-5 for batch 4.
     batch_size: int = 4
-    lr: float = 7.5e-5
+    lr: float = DINOV3_LR * 4 / DINOV3_BATCH  # linear scaling
     weight_decay: float = 1e-4
-    n_epochs: int = 25
-    grad_clip: float = 35.0  # from config-nyu.yaml; never triggers for a 200k-param probe
+    grad_clip: float = 35.0
+    n_epochs: int = DINOV3_EPOCHS
 
-    # Random crop: resize to train_size, then crop to scene_size.
-    # DINOv3 crops ~94% of area (416×544 from 565×427).
-    # We crop 512² from 560² ≈ 84% of area.
-    train_resize: int = 560
-
-    # CanViT episode.
     n_timesteps: int = 10
     canvas_grid: int = 32
     glimpse_px: int = 128
 
-    # Logging / checkpointing.
-    eval_every: int = 2000
+    eval_every: int = 4000
     log_every: int = 50
     num_workers: int = 4
     comet_project: str = "canvit-depth-poc"
     comet_workspace: str = "m2b3-ava"
     device: str = "cuda"
     amp: bool = True
-    ckpt_dir: Path = Path("checkpoints/depth-poc")
+    ckpt_dir: Path = Path("checkpoints/depth")
 
     @property
     def max_steps(self) -> int:
@@ -104,17 +92,10 @@ class Config:
         return self.max_steps // 3
 
 
-# ── Depth Probe ───────────────────────────────────────────────────────
-
-
 class DepthProbe(nn.Module):
-    """Linear depth probe: LN → Dropout2d → BN → Conv1x1(D→bins) → depth.
+    """LN → Dropout2d → BN → Conv1x1(D → bins) → AdaBins depth."""
 
-    Architecture mirrors SegmentationProbe but outputs bin logits
-    converted to metric depth via AdaBins-style weighted sum (dinov3).
-    """
-
-    def __init__(self, embed_dim: int, n_bins: int = 256, dropout: float = 0.1) -> None:
+    def __init__(self, embed_dim: int, n_bins: int = N_BINS, dropout: float = 0.1) -> None:
         super().__init__()
         self.embed_dim = embed_dim
         self.ln = nn.LayerNorm(embed_dim)
@@ -123,102 +104,65 @@ class DepthProbe(nn.Module):
         self.conv = nn.Conv2d(embed_dim, n_bins, kernel_size=1)
         nn.init.normal_(self.conv.weight, mean=0, std=0.01)
         nn.init.constant_(self.conv.bias, 0)
-        self.to_depth = FeaturesToDepth(
-            min_depth=MIN_DEPTH, max_depth=MAX_DEPTH,
-            bins_strategy="linear", norm_strategy="linear",
-        )
+        self.to_depth = FeaturesToDepth(min_depth=MIN_DEPTH, max_depth=MAX_DEPTH)
 
     def forward(self, x: Tensor) -> Tensor:
-        """[B, H, W, D] spatial features → [B, 1, H, W] depth in meters."""
-        B, H, W, D = x.shape
-        assert D == self.embed_dim
+        """[B, H, W, D] → [B, 1, H, W]."""
         x = self.ln(x)
         x = x.permute(0, 3, 1, 2).contiguous()
         x = self.dropout(x)
         x = self.bn(x)
-        bins = self.conv(x)
-        return self.to_depth(bins)  # [B, 1, H, W]
+        return self.to_depth(self.conv(x))
 
 
-# ── Feature extraction ────────────────────────────────────────────────
-# NOTE: images arrive already ImageNet-normalized from the transforms.
-
+# Images arrive already ImageNet-normalized from dinov3 transforms.
 
 def extract_teacher_features(teacher: nn.Module, images: Tensor) -> Tensor:
-    """DINOv3 ViT → [B, H, W, D] spatial patch features."""
     feats = teacher.forward_norm_features(images)
     B, N, D = feats.patches.shape
     H = W = int(N**0.5)
-    assert H * W == N, f"Non-square patch grid: {N}"
+    assert H * W == N
     return feats.patches.view(B, H, W, D)
 
 
-def extract_canvit_features(
-    model: nn.Module, images: Tensor, cfg: Config,
-) -> list[Tensor]:
-    """CanViT episode → list of [B, G, G, D] per timestep."""
+def extract_canvit_features(model: nn.Module, images: Tensor, cfg: Config) -> list[Tensor]:
     from canvit import sample_at_viewpoint
     from canvit.policies import random_viewpoints
-
-    B = images.shape[0]
-    device = images.device
-
+    B, device = images.shape[0], images.device
     vps = random_viewpoints(B, device, cfg.n_timesteps, min_scale=0.05, max_scale=1.0, start_with_full_scene=True)
     state = model.init_state(batch_size=B, canvas_grid_size=cfg.canvas_grid)
-
-    out_list: list[Tensor] = []
+    out: list[Tensor] = []
     for vp in vps:
         glimpse = sample_at_viewpoint(spatial=images, viewpoint=vp, glimpse_size_px=cfg.glimpse_px)
-        out = model(glimpse=glimpse, state=state, viewpoint=vp)
-        state = out.state
-        out_list.append(model.get_spatial(state.canvas).view(B, cfg.canvas_grid, cfg.canvas_grid, -1))
-    return out_list
-
-
-# ── Evaluation ────────────────────────────────────────────────────────
+        result = model(glimpse=glimpse, state=state, viewpoint=vp)
+        state = result.state
+        out.append(model.get_spatial(state.canvas).view(B, cfg.canvas_grid, cfg.canvas_grid, -1))
+    return out
 
 
 @torch.no_grad()
-def evaluate(
-    probe: nn.Module,
-    backbone: nn.Module,
-    loader: DataLoader,
-    cfg: Config,
-    device: torch.device,
-    amp_ctx: torch.amp.autocast,
-) -> dict[str, float]:
-    """Run test set with Eigen crop mask, return averaged depth metrics."""
+def evaluate(probe: nn.Module, backbone: nn.Module, loader: DataLoader,
+             cfg: Config, device: torch.device, amp_ctx: torch.amp.autocast) -> dict[str, float]:
     probe.eval()
     sums: dict[str, float] = {}
     n = 0
-    for batch in loader:
-        images, depths = batch
+    for images, depths in loader:
         images, depths = images.to(device), depths.to(device)
-        # DINOv3 eval transforms: depth is [B, 1, H, W] at native resolution (480×640).
         if depths.ndim == 4:
-            depths = depths.squeeze(1)  # → [B, H, W]
+            depths = depths.squeeze(1)
         with amp_ctx:
-            if cfg.mode == "teacher":
-                feats = extract_teacher_features(backbone, images)
-            else:
-                feats = extract_canvit_features(backbone, images, cfg)[-1]
+            feats = (extract_teacher_features(backbone, images) if cfg.mode == "teacher"
+                     else extract_canvit_features(backbone, images, cfg)[-1])
             pred = probe(feats.float())
-        # Upsample prediction to depth's native resolution for metrics.
         pred = F.interpolate(pred, size=depths.shape[-2:], mode="bilinear", align_corners=False).squeeze(1)
         pred = pred.clamp(MIN_DEPTH, MAX_DEPTH)
-
-        # Eigen crop mask: standard NYU eval protocol.
-        eigen_mask = make_valid_mask(depths.unsqueeze(1), eval_crop=_EvalCropType.NYU_EIGEN).squeeze(1)
-
-        m = calculate_depth_metrics(depths, pred, eigen_mask)
-        for field in ("rmse", "abs_rel", "a1"):
-            v = getattr(m, field)
-            sums[field] = sums.get(field, 0.0) + (v.item() if isinstance(v, Tensor) else float(v))
+        mask = make_valid_mask(depths.unsqueeze(1), eval_crop=_EvalCropType.NYU_EIGEN).squeeze(1)
+        m = calculate_depth_metrics(depths, pred, mask)
+        for k in ("rmse", "abs_rel", "a1"):
+            v = getattr(m, k)
+            sums[k] = sums.get(k, 0.0) + (v.item() if isinstance(v, Tensor) else float(v))
         n += 1
     return {k: v / max(n, 1) for k, v in sums.items()}
-
-
-# ── Training ──────────────────────────────────────────────────────────
 
 
 def train(cfg: Config) -> None:
@@ -226,47 +170,25 @@ def train(cfg: Config) -> None:
     torch.set_float32_matmul_precision("high")
     device = torch.device(cfg.device)
 
-    log.info("=" * 60)
-    log.info(f"NYU Depth v2 POC — mode={cfg.mode}, scene={cfg.scene_size}, lr={cfg.lr}")
-    log.info("=" * 60)
+    log.info(f"mode={cfg.mode} scene={cfg.scene_size} crop={cfg.crop_size} "
+             f"lr={cfg.lr} epochs={cfg.n_epochs} steps={cfg.max_steps}")
 
-    # ── Transforms (imported from dinov3) ──
-    # Training: NYU crop → resize to train_resize² → to tensor → normalize depth
-    #   → random rotation ±2.5° → hflip → random crop to scene_size²
-    #   → color aug (brightness 0.75–1.25) → ImageNet normalize.
-    # Eval: full image → to tensor → resize to scene_size² → ImageNet normalize
-    #   → normalize depth. Depth stays at native 480×640 for Eigen crop eval.
     s = cfg.scene_size
     train_tf = make_depth_train_transforms(
-        normalization_constant=NYU_DEPTH_NORMALIZATION,
-        img_size=(cfg.train_resize, cfg.train_resize),
-        random_crop_size=(s, s),
-        fixed_crop="NYU",
-        brightness_range=(0.75, 1.25),
+        normalization_constant=DEPTH_NORM, img_size=(cfg.crop_size, cfg.crop_size),
+        random_crop_size=(s, s), fixed_crop="NYU", brightness_range=BRIGHTNESS_RANGE,
     )
-    eval_tf = make_depth_eval_transforms(
-        normalization_constant=NYU_DEPTH_NORMALIZATION,
-        img_size=(s, s),
-        fixed_crop="FULL",
-        tta=False,
+    _eval_tf = make_depth_eval_transforms(
+        normalization_constant=DEPTH_NORM, img_size=(s, s), fixed_crop="FULL", tta=False,
     )
+    eval_tf = lambda img, depth: tuple(x[0] for x in _eval_tf(img, depth))
 
-    # eval_tf returns ([image], [depth]) due to LeftRightFlipAug — unwrap.
-    def eval_transform(img, depth):
-        images, depths = eval_tf(img, depth)
-        return images[0], depths[0]
-
-    # ── Data ──
     train_ds = NYUDepthV2(cfg.nyu_root, "train", transform=train_tf)
-    test_ds = NYUDepthV2(cfg.nyu_root, "test", transform=eval_transform)
+    test_ds = NYUDepthV2(cfg.nyu_root, "test", transform=eval_tf)
     log.info(f"Train: {len(train_ds)}, Test: {len(test_ds)}")
-    train_loader = DataLoader(
-        train_ds, cfg.batch_size, shuffle=True,
-        num_workers=cfg.num_workers, pin_memory=True, drop_last=True,
-    )
+    train_loader = DataLoader(train_ds, cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True, drop_last=True)
     test_loader = DataLoader(test_ds, cfg.batch_size, num_workers=cfg.num_workers, pin_memory=True)
 
-    # ── Backbone (frozen) ──
     if cfg.mode == "teacher":
         from canvit_utils.teacher import load_teacher
         backbone = load_teacher(cfg.teacher_repo, device)
@@ -278,52 +200,37 @@ def train(cfg: Config) -> None:
             p.requires_grad_(False)
         embed_dim = backbone.canvas_dim
 
-    # ── Probe ──
     probe = DepthProbe(embed_dim, cfg.n_bins, cfg.dropout).to(device)
     opt = AdamW(probe.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     sched = WarmupOneCycleLR(
         opt, max_lr=cfg.lr, total_steps=cfg.max_steps,
         warmup_iters=cfg.warmup_steps, warmup_ratio=1e-6,
-        pct_start=0, anneal_strategy="cos",
-        final_div_factor=1000.0,
+        pct_start=0, anneal_strategy="cos", final_div_factor=1000.0,
         use_beta1=False, update_momentum=False,
     )
     criterion = SigLoss(warm_up=True, warm_iter=100)
-    n_params = sum(p.numel() for p in probe.parameters())
-    log.info(f"Probe: {n_params:,} params, {cfg.n_bins} bins, embed_dim={embed_dim}")
-    log.info(f"Training: {cfg.max_steps} steps ({cfg.n_epochs} epochs), lr={cfg.lr}, warmup={cfg.warmup_steps}")
+    log.info(f"Probe: {sum(p.numel() for p in probe.parameters()):,} params")
 
-    cfg.ckpt_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Comet ──
     import comet_ml
-
     api_key = os.environ.get("COMET_API_KEY")
     if not api_key:
-        key_file = Path.home() / "comet_api_key.txt"
-        if key_file.exists():
-            api_key = key_file.read_text().strip()
-
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    exp_name = f"depth_{cfg.mode}_s{cfg.scene_size}_lr{cfg.lr}_{ts}"
+        kf = Path.home() / "comet_api_key.txt"
+        if kf.exists():
+            api_key = kf.read_text().strip()
+    cfg.ckpt_dir.mkdir(parents=True, exist_ok=True)
     if api_key:
         exp = comet_ml.Experiment(api_key=api_key, project_name=cfg.comet_project, workspace=cfg.comet_workspace)
     else:
-        log.warning("No Comet API key found — logging offline only")
+        log.warning("No Comet API key — offline")
         exp = comet_ml.OfflineExperiment(project_name=cfg.comet_project, offline_directory=str(cfg.ckpt_dir))
-    exp.set_name(exp_name)
+    exp.set_name(f"depth_{cfg.mode}_s{cfg.scene_size}_{time.strftime('%Y%m%d_%H%M%S')}")
     exp.log_parameters(asdict(cfg))
-    exp.add_tag("depth-poc")
-    exp.add_tag(cfg.mode)
-    exp.add_tag(f"s{cfg.scene_size}")
-    exp.add_tag(f"lr{cfg.lr}")
-    exp.add_tag("eigen-crop")
-    exp.add_tag("dinov3-transforms")
-    amp_ctx = torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=cfg.amp)
-    best_rmse = float("inf")
-    feat_h = cfg.scene_size // 16 if cfg.mode == "teacher" else cfg.canvas_grid
+    for tag in ["depth", cfg.mode, f"s{cfg.scene_size}", f"e{cfg.n_epochs}"]:
+        exp.add_tag(tag)
 
-    # ── Training loop ──
+    amp_ctx = torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=cfg.amp)
+    feat_h = cfg.scene_size // 16 if cfg.mode == "teacher" else cfg.canvas_grid
+    best_rmse = float("inf")
     step = 0
     train_iter = iter(train_loader)
     pbar = tqdm(total=cfg.max_steps, desc="Training")
@@ -335,17 +242,11 @@ def train(cfg: Config) -> None:
             train_iter = iter(train_loader)
             images, depths = next(train_iter)
         images, depths = images.to(device), depths.to(device)
-        # DINOv3 transforms return depth as [B, 1, H, W]; squeeze to [B, H, W].
         if depths.ndim == 4:
             depths = depths.squeeze(1)
-
-        # Downsample depth to feature resolution for loss.
-        depth_low = F.interpolate(
-            depths.unsqueeze(1), size=(feat_h, feat_h), mode="nearest",
-        ).squeeze(1)
+        depth_low = F.interpolate(depths.unsqueeze(1), size=(feat_h, feat_h), mode="nearest").squeeze(1)
         valid_low = (depth_low > MIN_DEPTH) & (depth_low < MAX_DEPTH)
 
-        # ── Eval ──
         if step % cfg.eval_every == 0:
             metrics = evaluate(probe, backbone, test_loader, cfg, device, amp_ctx)
             log.info(f"Step {step}: RMSE={metrics['rmse']:.4f} abs_rel={metrics['abs_rel']:.4f} a1={metrics['a1']:.4f}")
@@ -362,26 +263,18 @@ def train(cfg: Config) -> None:
                 exp.log_metric("test/best_rmse", best_rmse, step=step)
             probe.train()
 
-        # ── Forward ──
         with amp_ctx:
             if cfg.mode == "teacher":
-                feats = extract_teacher_features(backbone, images)
-                pred = probe(feats.float()).squeeze(1)
-                loss = criterion(pred, depth_low, valid_low)
+                loss = criterion(probe(extract_teacher_features(backbone, images).float()).squeeze(1), depth_low, valid_low)
             else:
                 feats_per_t = extract_canvit_features(backbone, images, cfg)
-                losses = []
-                for feats_t in feats_per_t:
-                    pred_t = probe(feats_t.float()).squeeze(1)
-                    losses.append(criterion(pred_t, depth_low, valid_low))
-                loss = torch.stack(losses).mean()
+                loss = torch.stack([criterion(probe(f.float()).squeeze(1), depth_low, valid_low) for f in feats_per_t]).mean()
 
         opt.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(probe.parameters(), cfg.grad_clip)
         opt.step()
         sched.step()
-
         step += 1
         pbar.update(1)
         if step % cfg.log_every == 0:

@@ -1,9 +1,4 @@
-"""NYU Depth v2 dataset — BTS format (BinsFormer download).
-
-Returns raw (PIL image, PIL depth) pairs. All preprocessing
-(crops, resize, normalization) is handled by the transform pipeline
-from dinov3.eval.depth.transforms.
-"""
+"""NYU Depth v2 — BTS format. Returns raw PIL pairs; caller provides transform."""
 
 from pathlib import Path
 from typing import Callable, Literal
@@ -14,14 +9,8 @@ from torch.utils.data import Dataset
 
 
 class NYUDepthV2(Dataset):
-    """BTS-format NYU Depth v2: 24k train, 654 test samples."""
 
-    def __init__(
-        self,
-        root: Path,
-        split: Literal["train", "test"],
-        transform: Callable[[Image.Image, Image.Image], tuple[Tensor, Tensor]] | None = None,
-    ) -> None:
+    def __init__(self, root: Path, split: Literal["train", "test"], transform: Callable) -> None:
         self.root = root
         self.transform = transform
         split_file = root / f"nyu_{split}.txt"
@@ -39,6 +28,4 @@ class NYUDepthV2(Dataset):
         img_rel, depth_rel = self.pairs[idx]
         img = Image.open(self.root / img_rel).convert("RGB")
         depth = Image.open(self.root / depth_rel)
-        if self.transform is not None:
-            img, depth = self.transform(img, depth)
-        return img, depth
+        return self.transform(img, depth)
