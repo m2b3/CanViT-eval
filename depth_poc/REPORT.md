@@ -85,13 +85,32 @@ NYU Depth v2 (BTS subset):
   reported 0.356. Adding proper eval could bring both numbers down.
 - **Depth estimation is viable as a third downstream task.**
 
+### Per-timestep results (C2F policy, 21 timesteps)
+
+Probe trained with 5 random timesteps, evaluated with C2F (deterministic).
+
+| t | RMSE | abs_rel | a1 |
+|---|------|---------|-----|
+| 0 | 0.518 | 0.147 | 0.809 |
+| 1 | 0.508 | 0.143 | 0.819 |
+| 3 | 0.493 | 0.140 | 0.828 |
+| 5 | **0.487** | **0.139** | **0.830** |
+| 10 | 0.486 | 0.140 | 0.828 |
+| 15 | 0.486 | 0.142 | 0.825 |
+| 20 | 0.487 | 0.144 | 0.821 |
+
+**Key finding**: Depth saturates by t=5 and slightly degrades after t~10.
+Unlike ADE20K segmentation (which improves through t=20), depth is a more
+"global" task — coarse scene structure captured in early views suffices.
+Additional fine-grained views don't add depth information.
+
 ### Follow-up experiments (TODO)
 
 - [ ] C2F viewpoints during training (may reduce instability)
-- [ ] More timesteps (10, 20) during training and eval
-- [ ] Per-timestep eval for CanViT (not just last timestep)
-- [ ] Proper Eigen crop + TTA for comparable numbers
+- [ ] Proper Eigen crop + TTA for fair comparison to DINOv3 paper numbers
 - [ ] Full 38.4k training with augmentation on Nibi
+- [ ] Per-timestep CanViT evaluation with different policies (F2C, constant)
+- [ ] Higher resolution (1024px / c64) — does it help for depth?
 
 ## Integration Plan (Future Work)
 
