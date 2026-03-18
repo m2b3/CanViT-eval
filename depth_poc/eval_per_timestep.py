@@ -48,7 +48,7 @@ def main(cfg: EvalConfig) -> None:
     device = torch.device(cfg.device)
 
     # Load checkpoint.
-    ckpt = torch.load(cfg.ckpt, map_location=device, weights_only=True)
+    ckpt = torch.load(cfg.ckpt, map_location=device, weights_only=False)
     ckpt_cfg = ckpt["config"]
     log.info(f"Loaded checkpoint: {cfg.ckpt}")
     log.info(f"  Original mode: {ckpt_cfg['mode']}, scene: {ckpt_cfg['scene_size']}")
