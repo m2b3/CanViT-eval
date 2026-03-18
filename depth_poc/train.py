@@ -1,13 +1,12 @@
 """NYU Depth v2 linear depth probe — DINOv3 teacher & CanViT features.
 
 Standalone POC for the paper. Reuses dinov3 loss, metrics, transforms,
-and bin-to-depth conversion. Designed for eventual integration into
-canvit-probes.
+scheduler, and bin-to-depth conversion.
 
-Training protocol matches DINOv3 Appendix D.2 except:
-- Square resize to scene_size (DINOv3 uses native 480×640 aspect ratio)
-- Single GPU batch 4 (DINOv3 uses 2×8 GPUs = effective batch 16)
-- LR should be scaled accordingly (linear scaling: lr ∝ batch_size)
+Probe architecture matches DINOv3 Appendix D.2: linear classifier (BN + Conv1x1)
+on frozen patch features after LN. Loss, metrics, transforms imported from
+the dinov3 codebase (config-nyu.yaml). Steps scaled to match their epoch count.
+Only deviation: square resize (DINOv3 uses native 480×640 aspect ratio).
 
 Usage (teacher baseline):
     uv run python depth_poc/train.py --nyu-root /datasets/NYU/nyu
@@ -32,9 +31,9 @@ from dinov3.eval.depth.loss import SigLoss
 from dinov3.eval.depth.metrics import calculate_depth_metrics
 from dinov3.eval.depth.models import FeaturesToDepth
 from dinov3.eval.depth.transforms import make_depth_eval_transforms, make_depth_train_transforms
+from dinov3.eval.segmentation.schedulers import WarmupOneCycleLR
 from torch import Tensor
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import OneCycleLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -48,6 +47,9 @@ NYU_DEPTH_NORMALIZATION = 1000.0  # uint16 → meters
 
 
 # ── Config ────────────────────────────────────────────────────────────
+
+
+NYU_TRAIN_SIZE = 24231
 
 
 @dataclass
@@ -64,21 +66,27 @@ class Config:
     n_bins: int = 256
     dropout: float = 0.1
 
-    # Training.
+    # Training — defaults match DINOv3 Appendix D.2, epoch-scaled for batch 4.
+    # DINOv3: 38.4k steps × batch 16 = 25 epochs. Ours: 151k steps × batch 4 = 25 epochs.
+    # LR: DINOv3 uses 3e-4 for batch 16. Linear scaling → 7.5e-5 for batch 4.
     batch_size: int = 4
-    lr: float = 3e-4
+    lr: float = 7.5e-5
     weight_decay: float = 1e-4
-    max_steps: int = 10_000
-    warmup_frac: float = 0.33
-    grad_clip: float = 35.0
+    n_epochs: int = 25
+    grad_clip: float = 35.0  # from config-nyu.yaml; never triggers for a 200k-param probe
+
+    # Random crop: resize to train_size, then crop to scene_size.
+    # DINOv3 crops ~94% of area (416×544 from 565×427).
+    # We crop 512² from 560² ≈ 84% of area.
+    train_resize: int = 560
 
     # CanViT episode.
-    n_timesteps: int = 5
+    n_timesteps: int = 10
     canvas_grid: int = 32
     glimpse_px: int = 128
 
     # Logging / checkpointing.
-    eval_every: int = 500
+    eval_every: int = 2000
     log_every: int = 50
     num_workers: int = 4
     comet_project: str = "canvit-depth-poc"
@@ -86,6 +94,14 @@ class Config:
     device: str = "cuda"
     amp: bool = True
     ckpt_dir: Path = Path("checkpoints/depth-poc")
+
+    @property
+    def max_steps(self) -> int:
+        return (NYU_TRAIN_SIZE // self.batch_size) * self.n_epochs
+
+    @property
+    def warmup_steps(self) -> int:
+        return self.max_steps // 3
 
 
 # ── Depth Probe ───────────────────────────────────────────────────────
@@ -214,17 +230,19 @@ def train(cfg: Config) -> None:
     log.info(f"NYU Depth v2 POC — mode={cfg.mode}, scene={cfg.scene_size}, lr={cfg.lr}")
     log.info("=" * 60)
 
-    # ── Transforms (from dinov3) ──
-    # Training: NYU crop → resize to square → to tensor → normalize depth
-    #   → random rotation → random flip → random crop → color aug → ImageNet normalize.
-    # Eval: no crop → to tensor → resize → ImageNet normalize → normalize depth.
+    # ── Transforms (imported from dinov3) ──
+    # Training: NYU crop → resize to train_resize² → to tensor → normalize depth
+    #   → random rotation ±2.5° → hflip → random crop to scene_size²
+    #   → color aug (brightness 0.75–1.25) → ImageNet normalize.
+    # Eval: full image → to tensor → resize to scene_size² → ImageNet normalize
+    #   → normalize depth. Depth stays at native 480×640 for Eigen crop eval.
     s = cfg.scene_size
     train_tf = make_depth_train_transforms(
         normalization_constant=NYU_DEPTH_NORMALIZATION,
-        img_size=(s, s),
-        random_crop_size=(s, s),  # no spatial crop (same as resize); augmentation comes from rotation+flip+color
+        img_size=(cfg.train_resize, cfg.train_resize),
+        random_crop_size=(s, s),
         fixed_crop="NYU",
-        brightness_range=(0.75, 1.25),  # DINOv3 NYU config
+        brightness_range=(0.75, 1.25),
     )
     eval_tf = make_depth_eval_transforms(
         normalization_constant=NYU_DEPTH_NORMALIZATION,
@@ -263,10 +281,17 @@ def train(cfg: Config) -> None:
     # ── Probe ──
     probe = DepthProbe(embed_dim, cfg.n_bins, cfg.dropout).to(device)
     opt = AdamW(probe.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    sched = OneCycleLR(opt, max_lr=cfg.lr, total_steps=cfg.max_steps, pct_start=cfg.warmup_frac)
+    sched = WarmupOneCycleLR(
+        opt, max_lr=cfg.lr, total_steps=cfg.max_steps,
+        warmup_iters=cfg.warmup_steps, warmup_ratio=1e-6,
+        pct_start=0, anneal_strategy="cos",
+        final_div_factor=1000.0,
+        use_beta1=False, update_momentum=False,
+    )
     criterion = SigLoss(warm_up=True, warm_iter=100)
     n_params = sum(p.numel() for p in probe.parameters())
     log.info(f"Probe: {n_params:,} params, {cfg.n_bins} bins, embed_dim={embed_dim}")
+    log.info(f"Training: {cfg.max_steps} steps ({cfg.n_epochs} epochs), lr={cfg.lr}, warmup={cfg.warmup_steps}")
 
     cfg.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
