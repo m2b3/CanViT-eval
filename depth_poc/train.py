@@ -125,19 +125,31 @@ def extract_teacher_features(teacher: nn.Module, images: Tensor) -> Tensor:
     return feats.patches.view(B, H, W, D)
 
 
-def extract_canvit_features(model: nn.Module, images: Tensor, cfg: Config) -> list[Tensor]:
+def _run_canvit_episode(model: nn.Module, images: Tensor, cfg: Config, viewpoints: list) -> list[Tensor]:
     from canvit import sample_at_viewpoint
-    from canvit.policies import random_viewpoints
-    B, device = images.shape[0], images.device
-    vps = random_viewpoints(B, device, cfg.n_timesteps, min_scale=0.05, max_scale=1.0, start_with_full_scene=True)
+    B = images.shape[0]
     state = model.init_state(batch_size=B, canvas_grid_size=cfg.canvas_grid)
     out: list[Tensor] = []
-    for vp in vps:
+    for vp in viewpoints:
         glimpse = sample_at_viewpoint(spatial=images, viewpoint=vp, glimpse_size_px=cfg.glimpse_px)
         result = model(glimpse=glimpse, state=state, viewpoint=vp)
         state = result.state
         out.append(model.get_spatial(state.canvas).view(B, cfg.canvas_grid, cfg.canvas_grid, -1))
     return out
+
+
+def extract_canvit_features_train(model: nn.Module, images: Tensor, cfg: Config) -> list[Tensor]:
+    """Random viewpoints for training (stochastic)."""
+    from canvit.policies import random_viewpoints
+    vps = random_viewpoints(images.shape[0], images.device, cfg.n_timesteps, min_scale=0.05, max_scale=1.0, start_with_full_scene=True)
+    return _run_canvit_episode(model, images, cfg, vps)
+
+
+def extract_canvit_features_eval(model: nn.Module, images: Tensor, cfg: Config) -> list[Tensor]:
+    """C2F viewpoints for evaluation (deterministic)."""
+    from canvit.policies import coarse_to_fine_viewpoints
+    vps = coarse_to_fine_viewpoints(images.shape[0], images.device, cfg.n_timesteps)
+    return _run_canvit_episode(model, images, cfg, vps)
 
 
 @torch.no_grad()
@@ -153,7 +165,7 @@ def evaluate(probe: nn.Module, backbone: nn.Module, loader: DataLoader,
             depths = depths.squeeze(1)
         with amp_ctx:
             feats = (extract_teacher_features(backbone, images) if cfg.mode == "teacher"
-                     else extract_canvit_features(backbone, images, cfg)[-1])
+                     else extract_canvit_features_eval(backbone, images, cfg)[-1])
             pred = probe(feats.float())
         pred = F.interpolate(pred, size=depths.shape[-2:], mode="bilinear", align_corners=False).squeeze(1)
         pred = pred.clamp(MIN_DEPTH, MAX_DEPTH)
@@ -269,7 +281,7 @@ def train(cfg: Config) -> None:
             if cfg.mode == "teacher":
                 loss = criterion(probe(extract_teacher_features(backbone, images).float()).squeeze(1), depth_low, valid_low)
             else:
-                feats_per_t = extract_canvit_features(backbone, images, cfg)
+                feats_per_t = extract_canvit_features_train(backbone, images, cfg)
                 loss = torch.stack([criterion(probe(f.float()).squeeze(1), depth_low, valid_low) for f in feats_per_t]).mean()
 
         opt.zero_grad()
