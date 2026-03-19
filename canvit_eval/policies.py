@@ -30,7 +30,7 @@ PolicyName = Literal[
     "random",
     "full_then_random",
     "entropy_coarse_to_fine",
-    "constant_full_scene",
+    "repeated_full_scene",
 ]
 
 # Subset for IN1K classification (entropy C2F and constant full scene not applicable).
@@ -173,7 +173,7 @@ def make_policy(
         return StaticPolicy(name, random_viewpoints(
             batch_size, device, n_viewpoints, min_scale=min_scale, max_scale=max_scale, start_with_full_scene=False,
         ))
-    if name == "constant_full_scene":
+    if name == "repeated_full_scene":
         return StaticPolicy(name, constant_full_scene(batch_size, device, n_viewpoints))
     if name == "entropy_coarse_to_fine":
         assert probe is not None and get_spatial_fn is not None, \

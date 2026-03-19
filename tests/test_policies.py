@@ -38,8 +38,8 @@ def test_f2c_starts_with_finest() -> None:
     assert vps[0].scales[0].item() < 1.0
 
 
-def test_constant_full_scene_same_every_step() -> None:
-    policy = make_policy("constant_full_scene", batch_size=2, device=torch.device("cpu"), n_viewpoints=5)
+def test_repeated_full_scene_same_every_step() -> None:
+    policy = make_policy("repeated_full_scene", batch_size=2, device=torch.device("cpu"), n_viewpoints=5)
     for t in range(5):
         vp = policy.step(t, None)  # type: ignore[arg-type]
         assert vp.scales[0].item() == 1.0
@@ -47,7 +47,7 @@ def test_constant_full_scene_same_every_step() -> None:
 
 def test_all_policies_produce_correct_count() -> None:
     T = 5
-    for name in ["coarse_to_fine", "fine_to_coarse", "random", "full_then_random", "constant_full_scene"]:
+    for name in ["coarse_to_fine", "fine_to_coarse", "random", "full_then_random", "repeated_full_scene"]:
         policy = make_policy(name, batch_size=2, device=torch.device("cpu"), n_viewpoints=T)  # type: ignore[arg-type]
         assert isinstance(policy, StaticPolicy)
         assert len(policy._viewpoints) == T, f"{name}: expected {T} viewpoints, got {len(policy._viewpoints)}"

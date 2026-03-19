@@ -39,7 +39,7 @@ def _utc_timestamp() -> str:
 # ── ADE20K segmentation constants ─────────────────────────────────────
 
 ALL_POLICIES: list[str] = list(get_args(PolicyName))
-DETERMINISTIC: set[str] = {"constant_full_scene"}
+DETERMINISTIC: set[str] = {"repeated_full_scene"}
 ADE20K_RESOLUTIONS = [(512, 32, 32), (1024, 64, 8)]  # (scene_px, canvas_grid, batch_size)
 
 DINOV3_VARIANTS: dict[str, str] = {

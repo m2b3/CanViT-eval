@@ -18,7 +18,7 @@ def test_all_policies_from_literal():
     """ALL_POLICIES derived from PolicyName Literal, not hardcoded."""
     assert "coarse_to_fine" in ALL_POLICIES
     assert "entropy_coarse_to_fine" in ALL_POLICIES
-    assert "constant_full_scene" in ALL_POLICIES
+    assert "repeated_full_scene" in ALL_POLICIES
     assert len(ALL_POLICIES) == 6
 
 

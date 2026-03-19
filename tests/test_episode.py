@@ -55,7 +55,7 @@ def test_episode_canvas_evolves(model: CanViTForPretrainingHFHub) -> None:
 def test_all_static_policies(model: CanViTForPretrainingHFHub) -> None:
     """Every static policy produces valid episodes."""
     images = torch.randn(1, 3, 256, 256)
-    for name in ["coarse_to_fine", "fine_to_coarse", "random", "full_then_random", "constant_full_scene"]:
+    for name in ["coarse_to_fine", "fine_to_coarse", "random", "full_then_random", "repeated_full_scene"]:
         policy = make_policy(name, batch_size=1, device=DEVICE, n_viewpoints=3, canvas_grid=CANVAS_GRID)
         steps = run_episode(
             model=model, images=images, policy=policy,
