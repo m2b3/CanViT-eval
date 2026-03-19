@@ -147,7 +147,7 @@ def evaluate(probe: nn.Module, backbone: nn.Module, loader: DataLoader,
     sums: dict[str, float] = {}
     n = 0
     for images, depths in loader:
-        images, depths = images.to(device), depths.to(device)
+        images, depths = images.to(device), depths.to(device, dtype=torch.float32)
         if depths.ndim == 4:
             depths = depths.squeeze(1)
         with amp_ctx:
@@ -241,7 +241,7 @@ def train(cfg: Config) -> None:
         except StopIteration:
             train_iter = iter(train_loader)
             images, depths = next(train_iter)
-        images, depths = images.to(device), depths.to(device)
+        images, depths = images.to(device), depths.to(device, dtype=torch.float32)
         if depths.ndim == 4:
             depths = depths.squeeze(1)
         depth_low = F.interpolate(depths.unsqueeze(1), size=(feat_h, feat_h), mode="nearest").squeeze(1)
