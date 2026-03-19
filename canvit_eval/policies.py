@@ -15,7 +15,7 @@ import torch
 from canvit import RecurrentState, Viewpoint
 from canvit.policies import (
     coarse_to_fine_viewpoints,
-    constant_full_scene,
+    repeated_full_scene,
     fine_to_coarse_viewpoints,
     level_viewpoints,
     random_viewpoints,
@@ -174,7 +174,7 @@ def make_policy(
             batch_size, device, n_viewpoints, min_scale=min_scale, max_scale=max_scale, start_with_full_scene=False,
         ))
     if name == "repeated_full_scene":
-        return StaticPolicy(name, constant_full_scene(batch_size, device, n_viewpoints))
+        return StaticPolicy(name, repeated_full_scene(batch_size, device, n_viewpoints))
     if name == "entropy_coarse_to_fine":
         assert probe is not None and get_spatial_fn is not None, \
             "entropy_coarse_to_fine requires probe= and get_spatial_fn="
