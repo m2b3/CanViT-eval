@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import torch
-from canvit import CanViTOutput, RecurrentState, Viewpoint, sample_at_viewpoint
+from canvit_pytorch import CanViTOutput, RecurrentState, Viewpoint, sample_at_viewpoint
 from torch import Tensor
 
 

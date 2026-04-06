@@ -126,7 +126,7 @@ def extract_teacher_features(teacher: nn.Module, images: Tensor) -> Tensor:
 
 
 def _run_canvit_episode(model: nn.Module, images: Tensor, cfg: Config, viewpoints: list) -> list[Tensor]:
-    from canvit import sample_at_viewpoint
+    from canvit_pytorch import sample_at_viewpoint
     B = images.shape[0]
     state = model.init_state(batch_size=B, canvas_grid_size=cfg.canvas_grid)
     out: list[Tensor] = []
@@ -140,14 +140,14 @@ def _run_canvit_episode(model: nn.Module, images: Tensor, cfg: Config, viewpoint
 
 def extract_canvit_features_train(model: nn.Module, images: Tensor, cfg: Config) -> list[Tensor]:
     """Random viewpoints for training (stochastic)."""
-    from canvit.policies import random_viewpoints
+    from canvit_pytorch.policies import random_viewpoints
     vps = random_viewpoints(images.shape[0], images.device, cfg.n_timesteps, min_scale=0.05, max_scale=1.0, start_with_full_scene=True)
     return _run_canvit_episode(model, images, cfg, vps)
 
 
 def extract_canvit_features_eval(model: nn.Module, images: Tensor, cfg: Config) -> list[Tensor]:
     """C2F viewpoints for evaluation (deterministic)."""
-    from canvit.policies import coarse_to_fine_viewpoints
+    from canvit_pytorch.policies import coarse_to_fine_viewpoints
     vps = coarse_to_fine_viewpoints(images.shape[0], images.device, cfg.n_timesteps)
     return _run_canvit_episode(model, images, cfg, vps)
 
@@ -207,7 +207,7 @@ def train(cfg: Config) -> None:
         backbone = load_teacher(cfg.teacher_repo, device)
         embed_dim = backbone.embed_dim
     else:
-        from canvit import CanViTForPretrainingHFHub
+        from canvit_pytorch import CanViTForPretrainingHFHub
         backbone = CanViTForPretrainingHFHub.from_pretrained(cfg.model_repo).to(device).eval()
         for p in backbone.parameters():
             p.requires_grad_(False)

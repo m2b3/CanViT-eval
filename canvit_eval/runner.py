@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import torch
-from canvit.model.pretraining.hub import CanViTForPretrainingHFHub
+from canvit_pytorch.model.pretraining.hub import CanViTForPretrainingHFHub
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 

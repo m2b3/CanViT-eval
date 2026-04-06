@@ -51,8 +51,8 @@ def main(cfg: EvalConfig) -> None:
     log.info(f"  mode={ckpt_cfg['mode']}, scene={ckpt_cfg['scene_size']}, step={ckpt.get('step', '?')}")
     log.info(f"  train metrics: {ckpt.get('metrics', 'N/A')}")
 
-    from canvit import CanViTForPretrainingHFHub, sample_at_viewpoint
-    from canvit.policies import coarse_to_fine_viewpoints
+    from canvit_pytorch import CanViTForPretrainingHFHub, sample_at_viewpoint
+    from canvit_pytorch.policies import coarse_to_fine_viewpoints
 
     model = CanViTForPretrainingHFHub.from_pretrained(cfg.model_repo).to(device).eval()
     for p in model.parameters():

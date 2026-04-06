@@ -2,7 +2,7 @@
 
 import pytest
 import torch
-from canvit.policies import level_viewpoints
+from canvit_pytorch.policies import level_viewpoints
 
 from canvit_eval.policies import (
     StaticPolicy,
@@ -12,7 +12,7 @@ from canvit_eval.policies import (
 
 
 def test_level_viewpoints_count() -> None:
-    """Tests the core canvit.policies.level_viewpoints (imported by eval)."""
+    """Tests the core canvit_pytorch.policies.level_viewpoints (imported by eval)."""
     assert len(level_viewpoints(0)) == 1    # full scene
     assert len(level_viewpoints(1)) == 4    # 2×2
     assert len(level_viewpoints(2)) == 16   # 4×4

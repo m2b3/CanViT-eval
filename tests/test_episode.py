@@ -5,8 +5,8 @@ Uses the real CanViT model from HuggingFace — tiny forward passes on CPU.
 
 import pytest
 import torch
-from canvit import Viewpoint
-from canvit.model.pretraining.hub import CanViTForPretrainingHFHub
+from canvit_pytorch import Viewpoint
+from canvit_pytorch.model.pretraining.hub import CanViTForPretrainingHFHub
 from canvit_probes import SegmentationProbe
 
 from canvit_eval.episode import EpisodeStep, run_episode

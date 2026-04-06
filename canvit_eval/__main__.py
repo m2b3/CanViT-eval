@@ -42,7 +42,7 @@ class ADE20kSegCmd:
         device = torch.device(self.device)
 
         if self.model == "canvit":
-            from canvit.model.pretraining.hub import CanViTForPretrainingHFHub
+            from canvit_pytorch.model.pretraining.hub import CanViTForPretrainingHFHub
             m = CanViTForPretrainingHFHub.from_pretrained(self.episode.model_repo).to(device).eval()
             cg = self.episode.canvas_grid or self.scene_size // m.backbone.patch_size_px
             # Load probe for entropy policy

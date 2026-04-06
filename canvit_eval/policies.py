@@ -1,6 +1,6 @@
 """Viewing policies for CanViT evaluation.
 
-Static policies (C2F, F2C, random, etc.) are viewpoint generators from canvit.policies.
+Static policies (C2F, F2C, random, etc.) are viewpoint generators from canvit_pytorch.policies.
 This module wraps them into the Policy protocol and adds interactive policies
 (entropy-guided C2F) that depend on model state.
 
@@ -12,8 +12,8 @@ from collections.abc import Callable
 from typing import Literal
 
 import torch
-from canvit import RecurrentState, Viewpoint
-from canvit.policies import (
+from canvit_pytorch import RecurrentState, Viewpoint
+from canvit_pytorch.policies import (
     coarse_to_fine_viewpoints,
     repeated_full_scene,
     fine_to_coarse_viewpoints,

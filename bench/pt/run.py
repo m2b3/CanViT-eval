@@ -37,9 +37,9 @@ import torch
 import torch._inductor.config
 import tyro
 
-from canvit.backbone import create_backbone
-from canvit.model.base import CanViT, CanViTConfig
-from canvit.viewpoint import Viewpoint, sample_at_viewpoint
+from canvit_pytorch.backbone import create_backbone
+from canvit_pytorch.model.base import CanViT, CanViTConfig
+from canvit_pytorch.viewpoint import Viewpoint, sample_at_viewpoint
 from canvit_utils.teacher import load_teacher
 
 logging.basicConfig(
