@@ -14,7 +14,7 @@ import torch
 import torch.nn.functional as F
 from canvit_probes import SegmentationProbe
 from canvit_probes.datasets.ade20k import IGNORE_LABEL, NUM_CLASSES, ADE20kDataset, ResizeMode, make_val_transforms
-from canvit_probes.metrics import IoUAccumulator
+from canvit_probes.metrics import mIoUAccumulator
 from torch import Tensor
 from torch.utils.data import DataLoader
 
@@ -40,19 +40,19 @@ class Config:
     amp: bool = True
 
 
-class _IoUMetric:
+class _mIoUMetric:
     """Accumulates per-timestep IoU from spatial features."""
 
     def __init__(self, probe: SegmentationProbe, device: torch.device) -> None:
         self._probe = probe
         self._device = device
-        self._accs: list[IoUAccumulator] = []
+        self._accs: list[mIoUAccumulator] = []
 
     def update(self, t: int, features: Tensor, batch: tuple) -> None:
         _, masks = batch
         masks = masks.to(self._device, non_blocking=True)
         while len(self._accs) <= t:
-            self._accs.append(IoUAccumulator(NUM_CLASSES, IGNORE_LABEL, self._device))
+            self._accs.append(mIoUAccumulator(NUM_CLASSES, IGNORE_LABEL, self._device))
 
         logits = self._probe(features.float())
         if logits.shape[-1] != masks.shape[-1]:
@@ -89,7 +89,7 @@ def run(
     return evaluate(
         loader=loader,
         extract_features=extract_features,
-        metric=_IoUMetric(probe, device),
+        metric=_mIoUMetric(probe, device),
         output=cfg.output,
         device=device,
         amp=cfg.amp,
