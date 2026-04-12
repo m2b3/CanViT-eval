@@ -86,7 +86,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "canvit-probes", git = "ssh://git@github.com/m2b3/CanViT-probes.git?branch=main" },
+    { name = "canvit-probes", git = "ssh://git@github.com/m2b3/CanViT-probes.git?branch=sdu%2Frename-to-mmIoUAccumulator" },
     { name = "canvit-pytorch", git = "https://github.com/m2b3/CanViT-PyTorch.git" },
     { name = "huggingface-hub", specifier = ">=0.20.0" },
     { name = "pillow", specifier = ">=10.0.0" },
@@ -109,7 +109,7 @@ dev = [
 [[package]]
 name = "canvit-probes"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/m2b3/CanViT-probes.git?branch=main#2bdaca71a553dc8bcf28db1f8ea839f9f8393718" }
+source = { git = "ssh://git@github.com/m2b3/CanViT-probes.git?branch=sdu%2Frename-to-mmIoUAccumulator#226a7e4ad2a681a2a8dfb869ea56bde9fa84dd79" }
 dependencies = [
     { name = "canvit-pytorch" },
     { name = "comet-ml" },
@@ -118,6 +118,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "pandas" },
     { name = "pillow" },
+    { name = "pypatree" },
     { name = "safetensors" },
     { name = "scikit-learn" },
     { name = "timm" },

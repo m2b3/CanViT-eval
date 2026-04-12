@@ -45,4 +45,4 @@ line-length = 120
 
 [tool.uv.sources]
 canvit-pytorch = { git = "https://github.com/m2b3/CanViT-PyTorch.git" }
-canvit-probes = { git = "ssh://git@github.com/m2b3/CanViT-probes.git", branch = "main" }
+canvit-probes = { git = "ssh://git@github.com/m2b3/CanViT-probes.git", branch = "sdu/rename-to-mmIoUAccumulator" }
