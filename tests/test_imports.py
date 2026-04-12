@@ -69,4 +69,4 @@ def test_evaluate_protocol_shape():
 
 
 def test_task_modules_importable():
-    from canvit_eval.tasks import ade20k_seg, in1k_clf, reconstruction  # noqa: F401
+    from canvit_eval.tasks import ade20k_seg_mIoU, in1k_clf, reconstruction  # noqa: F401

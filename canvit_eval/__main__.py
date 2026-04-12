@@ -37,7 +37,7 @@ class ADE20kSegCmd:
 
     def run(self) -> None:
         from canvit_eval.features import canvit_extractor, dinov3_extractor
-        from canvit_eval.tasks.ade20k_seg import Config, run
+        from canvit_eval.tasks.ade20k_seg_mIoU import Config, run
 
         device = torch.device(self.device)
 
