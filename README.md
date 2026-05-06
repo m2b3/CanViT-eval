@@ -47,13 +47,13 @@ Subcommands:
 - `reconstruction`: cosine similarity between CanViT canvas/CLS and DINOv3
   teacher features per timestep.
 
-Concrete example (flagship ADE20K config: 1024 px scene, 64×64 canvas,
+Concrete example (flagship ADE20K config: 512 px scene, 64×64 canvas,
 21 timesteps):
 
 ```bash
 uv run python -m canvit_eval ade20k-seg-canvit \
-    --probe-repo canvit/probe-ade20k-40k-s1024-c64-in21k \
-    --scene-size 1024 --episode.canvas-grid 64 \
+    --probe-repo canvit/probe-ade20k-40k-s512-c64-in21k \
+    --scene-size 512 --episode.canvas-grid 64 \
     --output results/ade20k_seg.pt
 ```
 

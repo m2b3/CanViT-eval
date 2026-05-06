@@ -56,7 +56,7 @@ CANVIT_PROBE_REPOS: dict[int, str] = {
     16: resolve_canvit_repo("probe-ade20k-40k-s512-c16-in21k"),
     24: resolve_canvit_repo("probe-ade20k-40k-s512-c24-in21k"),
     32: resolve_canvit_repo("probe-ade20k-40k-s512-c32-in21k"),
-    64: resolve_canvit_repo("probe-ade20k-40k-s1024-c64-in21k"),
+    64: resolve_canvit_repo("probe-ade20k-40k-s512-c64-in21k"),
 }
 
 
