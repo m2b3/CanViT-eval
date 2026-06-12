@@ -54,8 +54,10 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
-canvit-pytorch = { git = "https://github.com/m2b3/CanViT-PyTorch.git" }
-canvit-specialize = { git = "https://github.com/m2b3/CanViT-specialize.git" }
+# TEMPORARY (flip back to default branch when ablation-checkpoint-registry merges):
+canvit-pytorch = { git = "https://github.com/m2b3/CanViT-PyTorch.git", branch = "ablation-checkpoint-registry" }
+# TEMPORARY (flip back to default branch when ablation-probe-push merges):
+canvit-specialize = { git = "https://github.com/m2b3/CanViT-specialize.git", branch = "ablation-probe-push" }
 # Pin cu128 wheels on Linux GPU hosts. On macOS, fall
 # back to default PyPI (CPU-only wheels) for local development. This mirrors
 # canvit-specialize's pyproject — needed because cu128 torch is now a transitive

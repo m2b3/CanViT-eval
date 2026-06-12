@@ -95,8 +95,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "canvit-pytorch", git = "https://github.com/m2b3/CanViT-PyTorch.git" },
-    { name = "canvit-specialize", git = "https://github.com/m2b3/CanViT-specialize.git" },
+    { name = "canvit-pytorch", git = "https://github.com/m2b3/CanViT-PyTorch.git?branch=ablation-checkpoint-registry" },
+    { name = "canvit-specialize", git = "https://github.com/m2b3/CanViT-specialize.git?branch=ablation-probe-push" },
     { name = "huggingface-hub", specifier = ">=0.20.0" },
     { name = "pillow", specifier = ">=10.0.0" },
     { name = "safetensors", specifier = ">=0.4.0" },
@@ -124,8 +124,8 @@ dev = [
 
 [[package]]
 name = "canvit-pytorch"
-version = "0.1.9"
-source = { git = "https://github.com/m2b3/CanViT-PyTorch.git#46f2be128dd784c4c141990216b952fbb16583a3" }
+version = "0.1.10"
+source = { git = "https://github.com/m2b3/CanViT-PyTorch.git?branch=ablation-checkpoint-registry#0d82e551895c2a37cb5844434c2c01c60f263398" }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "numpy" },
@@ -139,7 +139,7 @@ dependencies = [
 [[package]]
 name = "canvit-specialize"
 version = "0.1.0"
-source = { git = "https://github.com/m2b3/CanViT-specialize.git#eeca995d6cdcb49c37dec15d15f838de93e3dd9d" }
+source = { git = "https://github.com/m2b3/CanViT-specialize.git?branch=ablation-probe-push#1e3ca27190a5b5bd988faf9af5f4aef836d2509a" }
 dependencies = [
     { name = "canvit-pytorch" },
     { name = "comet-ml" },
@@ -148,7 +148,6 @@ dependencies = [
     { name = "matplotlib" },
     { name = "pandas" },
     { name = "pillow" },
-    { name = "pypatree" },
     { name = "safetensors" },
     { name = "scikit-learn" },
     { name = "timm" },

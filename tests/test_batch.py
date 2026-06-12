@@ -2,8 +2,15 @@
 
 from pathlib import Path
 
+from canvit_pytorch.checkpoints import (
+    ABLATION_CHECKPOINTS,
+    ABLATION_MODEL_SHORTS,
+    ade20k_probe_repo,
+)
+
 from canvit_eval.batch import (
-    ALL_TASKS,
+    DETERMINISTIC,
+    DEFAULT_TASKS,
     CANVAS_GRIDS,
     EXTRA_CANVAS_GRIDS,
     EXTRA_IN1K_RESOLUTIONS,
@@ -15,7 +22,7 @@ from canvit_eval.batch import (
 
 def test_breadth_first_scheduling():
     """Every r=0 runs before any r=1: an interrupted batch yields n=1 per cell."""
-    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=5, n_timesteps=21, tasks=ALL_TASKS)
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=5, n_timesteps=21, tasks=DEFAULT_TASKS)
     positions_by_run_idx: dict[int, list[int]] = {}
     for i, j in enumerate(jobs):
         positions_by_run_idx.setdefault(j.run_idx, []).append(i)
@@ -28,7 +35,7 @@ def test_breadth_first_scheduling():
 def test_eval_job_structural_tuple_is_unique():
     """(task, model, policy, scene_size, canvas_grid, input_px, run_idx) is the
     skip-existing matching key — must be unique per job."""
-    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21, tasks=ALL_TASKS,
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21, tasks=DEFAULT_TASKS,
                              include_extra_grids=True)
     keys = [(j.task, j.model, j.policy, j.scene_size, j.canvas_grid, j.input_px, j.run_idx)
             for j in jobs]
@@ -37,7 +44,7 @@ def test_eval_job_structural_tuple_is_unique():
 
 def test_eval_job_output_path_uniqueness():
     """Within one matrix build (single timestamp), no two jobs share an output path."""
-    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21, tasks=ALL_TASKS,
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21, tasks=DEFAULT_TASKS,
                              include_extra_grids=True)
     paths = [j.output for j in jobs]
     assert len(paths) == len(set(paths))
@@ -201,3 +208,34 @@ def test_skip_existing_fills_partial_n_runs(tmp_path):
     pending = sorted(j.run_idx for j in cells if not j.already_done())
     assert done == [0, 1, 2]
     assert pending == [3, 4]
+
+
+def test_ablation_seg_pairs_model_and_probe_by_slug():
+    """The seg CLI defaults --episode.model-repo to the flagship, and most
+    ablation variants share its canvas_dim — an ablation probe against the
+    wrong model would pass the embed-dim assert and produce plausible wrong
+    numbers. Every job must pin the model explicitly and pair it with the
+    probe published for that same checkpoint."""
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21,
+                             tasks=["ade20k-seg-ablations"])
+    # 12 variants x (4 stochastic x 10 runs + 2 deterministic x 1) at (512, 32).
+    assert len(jobs) == 12 * (4 * 10 + 2)
+    for j in jobs:
+        model_repo = j.args[j.args.index("--episode.model-repo") + 1]
+        probe_repo = j.args[j.args.index("--probe-repo") + 1]
+        slug = next(s for s, r in ABLATION_CHECKPOINTS.items() if r == model_repo)
+        assert j.model == f"abl-{slug}"
+        # Published-name contract: probes live under these exact repo ids.
+        assert probe_repo.endswith(f"-abl-{slug}")
+        assert probe_repo == ade20k_probe_repo(ABLATION_MODEL_SHORTS[model_repo], scene=512, grid=32)
+        assert j.output.parent.name == "ade20k_seg_ablations"
+
+
+def test_ablation_seg_deterministic_policies_run_once():
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21,
+                             tasks=["ade20k-seg-ablations"])
+    runs_per_cell: dict[tuple[str, str | None], int] = {}
+    for j in jobs:
+        runs_per_cell[(j.model, j.policy)] = runs_per_cell.get((j.model, j.policy), 0) + 1
+    for (_, policy), n in runs_per_cell.items():
+        assert n == (1 if policy in DETERMINISTIC else 10)
