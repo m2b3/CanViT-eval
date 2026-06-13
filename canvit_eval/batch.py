@@ -385,6 +385,17 @@ class Args:
     """Filter to these policies (empty = all). Applies to jobs that carry a policy field."""
     grids: list[int] = field(default_factory=list)
     """Filter to these canvas grids (empty = all). For DINOv3: grid = input_px // 16."""
+    shard: str = ""
+    """Run only one shard of the (sorted, filtered) job list: "k/N", 0-indexed,
+       strided as jobs[k::N]. For a SLURM array, pass "$SLURM_ARRAY_TASK_ID/<count>".
+       Applied before --skip-existing so the partition is stable across reruns."""
+
+
+def _apply_shard(jobs: list[EvalJob], spec: str) -> list[EvalJob]:
+    k_str, _, n_str = spec.partition("/")
+    k, n = int(k_str), int(n_str)
+    assert n >= 1 and 0 <= k < n, f"bad --shard {spec!r}: need 0 <= k < N, N >= 1"
+    return jobs[k::n]
 
 
 def main(args: Args) -> None:
@@ -396,6 +407,9 @@ def main(args: Args) -> None:
         max_batch_size=args.max_batch_size,
     )
     jobs = filter_jobs(jobs, policies=args.policies or None, grids=args.grids or None)
+    if args.shard:
+        jobs = _apply_shard(jobs, args.shard)
+        log.info("shard %s -> %d jobs", args.shard, len(jobs))
 
     n_total = len(jobs)
     if args.skip_existing:

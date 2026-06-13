@@ -1,5 +1,5 @@
 """Pure tests for the batch eval matrix — no GPU/data needed."""
-
+import pytest
 from pathlib import Path
 
 from canvit_pytorch.checkpoints import (
@@ -15,6 +15,7 @@ from canvit_eval.batch import (
     EXTRA_CANVAS_GRIDS,
     EXTRA_IN1K_RESOLUTIONS,
     IN1K_RESOLUTIONS,
+    _apply_shard,
     build_eval_matrix,
     filter_jobs,
 )
@@ -239,3 +240,23 @@ def test_ablation_seg_deterministic_policies_run_once():
         runs_per_cell[(j.model, j.policy)] = runs_per_cell.get((j.model, j.policy), 0) + 1
     for (_, policy), n in runs_per_cell.items():
         assert n == (1 if policy in DETERMINISTIC else 10)
+
+
+def test_shards_partition_the_job_list():
+    """Every job lands in exactly one shard; the shards' union is the whole list."""
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21,
+                             tasks=["ade20k-seg-ablations"])
+    for n in (1, 3, 12, 504, 1000):
+        shards = [_apply_shard(jobs, f"{k}/{n}") for k in range(n)]
+        recombined = [j for shard in shards for j in shard]
+        assert sorted(id(j) for j in recombined) == sorted(id(j) for j in jobs)
+        # Strided partition: shard sizes differ by at most 1.
+        sizes = [len(s) for s in shards]
+        assert max(sizes) - min(sizes) <= 1
+
+
+def test_shard_rejects_bad_spec():
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=1, n_timesteps=21, tasks=["ade20k-seg"])
+    for bad in ("3/3", "5/3", "-1/4", "0/0"):
+        with pytest.raises((AssertionError, ValueError)):
+            _apply_shard(jobs, bad)
