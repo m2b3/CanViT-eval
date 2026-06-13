@@ -109,7 +109,7 @@ def _probe_repo(scene: int, grid: int) -> str:
     return ade20k_probe_repo("in21k", scene=scene, grid=grid)
 
 
-TaskName = Literal["ade20k-seg", "ade20k-seg-ablations", "in1k-clf", "recon"]
+TaskName = Literal["ade20k-seg", "ade20k-seg-ablations", "in1k-clf", "in1k-clf-ablations", "recon"]
 # Paper-v1 matrix; ade20k-seg-ablations is opt-in so existing invocations
 # don't silently grow.
 DEFAULT_TASKS: list[TaskName] = ["ade20k-seg", "in1k-clf", "recon"]
@@ -277,6 +277,42 @@ def _in1k_clf_jobs(
     return jobs
 
 
+def _in1k_clf_ablation_jobs(
+    out_dir: Path, *, n_runs: int, n_timesteps: int, ts: str,
+) -> list[EvalJob]:
+    """Frozen IN1k classification for every pretraining-ablation checkpoint, C2F.
+
+    The frozen head is algebraically fused at load time from the checkpoint's own
+    CLS projection + the SHARED DINOv3 IN1k probe (no per-model probe training,
+    unlike ADE20K). Only the model differs per variant, so we pin
+    --episode.model-repo explicitly (the CLI defaults it to the flagship) and
+    leave --probe-repo at its default shared DINOv3 probe.
+    """
+    jobs: list[EvalJob] = []
+    d = out_dir / "in1k_clf_ablations"
+    scene, grid, bs = IN1K_RESOLUTIONS[0]  # (512, 32, 64) — the paper's frozen config
+    policy: PolicyName = "coarse_to_fine"
+    for slug, model_repo in ABLATION_CHECKPOINTS.items():
+        for run in range(_n_runs_for(policy, n_runs)):
+            stem = f"abl-{slug}_{policy}_s{scene}_c{grid}"
+            out = d / f"{stem}_{ts}_r{run}.pt"
+            jobs.append(EvalJob(
+                task="in1k-clf-ablations",
+                args=["in1k-clf", "--mode", "frozen",
+                      "--episode.model-repo", model_repo,
+                      "--scene-size", str(scene),
+                      "--batch-size", str(bs),
+                      "--episode.policy", policy,
+                      "--episode.canvas-grid", str(grid),
+                      "--episode.n-timesteps", str(n_timesteps),
+                      "--output", str(out)],
+                output=out, output_stem=f"{stem}_",
+                model=f"abl-{slug}", policy=policy,
+                scene_size=scene, canvas_grid=grid, run_idx=run,
+            ))
+    return jobs
+
+
 def _recon_jobs(out_dir: Path, *, n_runs: int, ts: str) -> list[EvalJob]:
     jobs: list[EvalJob] = []
     d = out_dir / "recon"
@@ -325,6 +361,8 @@ def build_eval_matrix(
         ))
     if "ade20k-seg-ablations" in tasks:
         jobs.extend(_ablation_seg_jobs(out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts))
+    if "in1k-clf-ablations" in tasks:
+        jobs.extend(_in1k_clf_ablation_jobs(out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts))
     if "in1k-clf" in tasks:
         # Extra grids only expand frozen mode; finetuned weights were specialised
         # at one (scene, grid) and off-grid inference is a separate question.
