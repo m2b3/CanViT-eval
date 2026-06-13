@@ -1,9 +1,9 @@
 """Sequential single-GPU batch eval.
 
-Outputs land in task-specific subdirs (ade20k_seg/, in1k_clf_{frozen,finetuned}/,
-recon/). Filenames carry a UTC timestamp; --skip-existing matches on the
-structural identity (task, model, policy, scene, grid, run_idx), so reruns
-resume cleanly across invocations.
+Outputs land in task-specific subdirs (ade20k_seg/, ade20k_seg_ablations/,
+in1k_clf_{frozen,finetuned}/, recon/). Filenames carry a UTC timestamp;
+--skip-existing matches on the structural identity (task, model, policy,
+scene, grid, run_idx), so reruns resume cleanly across invocations.
 
 Run `--help` for flags.
 """
@@ -19,6 +19,12 @@ from typing import Literal, get_args
 
 import tyro
 from canvit_pytorch import resolve_canvit_repo
+from canvit_pytorch.checkpoints import (
+    ABLATION_CHECKPOINTS,
+    ABLATION_MODEL_SHORTS,
+    ade20k_dinov3_probe_name,
+    ade20k_probe_repo,
+)
 
 from canvit_eval.config import DINOV3_VITB_REPO, DINOV3_VITS_REPO
 from canvit_eval.policies import IN1K_POLICIES, PolicyName, is_power_of_two
@@ -99,28 +105,14 @@ _BATCH_SIZE_BY_SCENE: dict[int, int] = {
 }
 
 
-ABLATION_REPOS: dict[str, str] = {
-    "baseline":      resolve_canvit_repo("canvitb16-abl-baseline-2026-03-02"),
-    "qkvo-dcan256":  resolve_canvit_repo("canvitb16-abl-qkvo-dcan256-2026-03-02"),
-    "qkvo-dcan384":  resolve_canvit_repo("canvitb16-abl-qkvo-dcan384-2026-03-02"),
-    "dcan256":       resolve_canvit_repo("canvitb16-abl-dcan256-2026-03-02"),
-    "no-dense":      resolve_canvit_repo("canvitb16-abl-no-dense-2026-03-02"),
-    "no-fiid-1riid": resolve_canvit_repo("canvitb16-abl-no-fiid-1riid-2026-03-02"),
-    "no-fiid-2riid": resolve_canvit_repo("canvitb16-abl-no-fiid-2riid-2026-03-06"),
-    "no-bptt":       resolve_canvit_repo("canvitb16-abl-no-bptt-2026-03-06"),
-    "no-reads":      resolve_canvit_repo("canvitb16-abl-no-reads-2026-03-02"),
-    "no-vpe":        resolve_canvit_repo("canvitb16-abl-no-vpe-2026-03-03"),
-    "rw-stride6":    resolve_canvit_repo("canvitb16-abl-rw-stride6-2026-03-03"),
-    "vit-s":         resolve_canvit_repo("canvitb16-abl-vit-s-2026-03-03"),
-}
-
-
 def _probe_repo(scene: int, grid: int) -> str:
-    return resolve_canvit_repo(f"probe-ade20k-40k-s{scene}-c{grid}-in21k")
+    return ade20k_probe_repo("in21k", scene=scene, grid=grid)
 
 
-TaskName = Literal["ade20k-seg", "in1k-clf", "recon"]
-ALL_TASKS: list[TaskName] = list(get_args(TaskName))
+TaskName = Literal["ade20k-seg", "ade20k-seg-ablations", "in1k-clf", "recon"]
+# Paper-v1 matrix; ade20k-seg-ablations is opt-in so existing invocations
+# don't silently grow.
+DEFAULT_TASKS: list[TaskName] = ["ade20k-seg", "in1k-clf", "recon"]
 
 
 # Matches the UTC timestamp `_utc_timestamp` writes into every output filename.
@@ -195,7 +187,7 @@ def _ade20k_seg_jobs(
             jobs.append(EvalJob(
                 task="ade20k-seg",
                 args=["ade20k-seg-dinov3",
-                      "--probe-repo", resolve_canvit_repo(f"probe-ade20k-40k-{variant}-{res}px"),
+                      "--probe-repo", resolve_canvit_repo(ade20k_dinov3_probe_name(variant, resolution=res)),
                       "--teacher-repo", teacher_repo,
                       "--eval-resolution", str(res), "--output", str(out)],
                 output=out, output_stem=f"{stem}_",
@@ -219,6 +211,41 @@ def _ade20k_seg_jobs(
             scene_size=scene, canvas_grid=grid, input_px=128,
         ))
 
+    return jobs
+
+
+def _ablation_seg_jobs(
+    out_dir: Path, *, n_runs: int, n_timesteps: int, ts: str,
+) -> list[EvalJob]:
+    """Paper-protocol ADE20K seg for every pretraining-ablation checkpoint.
+
+    Same policy matrix as the flagship at the (512, 32) config. The eval CLI
+    defaults `--episode.model-repo` to the flagship and most ablation variants
+    share its canvas_dim, so model and probe are both derived from the same
+    ABLATION_CHECKPOINTS entry here — never rely on the default.
+    """
+    jobs: list[EvalJob] = []
+    d = out_dir / "ade20k_seg_ablations"
+    scene, grid, bs = next(r for r in ADE20K_RESOLUTIONS if r[:2] == (512, 32))
+    for slug, model_repo in ABLATION_CHECKPOINTS.items():
+        probe = ade20k_probe_repo(ABLATION_MODEL_SHORTS[model_repo], scene=scene, grid=grid)
+        for policy in ALL_POLICIES:
+            if not _policy_runs_on_grid(policy, grid):
+                continue
+            for run in range(_n_runs_for(policy, n_runs)):
+                stem = f"abl-{slug}_{policy}_s{scene}_c{grid}"
+                out = d / f"{stem}_{ts}_r{run}.pt"
+                jobs.append(EvalJob(
+                    task="ade20k-seg-ablations",
+                    args=["ade20k-seg-canvit", "--probe-repo", probe,
+                          "--episode.model-repo", model_repo,
+                          "--episode.policy", policy, "--episode.n-timesteps", str(n_timesteps),
+                          "--episode.canvas-grid", str(grid), "--scene-size", str(scene),
+                          "--batch-size", str(bs), "--output", str(out)],
+                    output=out, output_stem=f"{stem}_",
+                    model=f"abl-{slug}", policy=policy,
+                    scene_size=scene, canvas_grid=grid, run_idx=run,
+                ))
     return jobs
 
 
@@ -253,7 +280,7 @@ def _in1k_clf_jobs(
 def _recon_jobs(out_dir: Path, *, n_runs: int, ts: str) -> list[EvalJob]:
     jobs: list[EvalJob] = []
     d = out_dir / "recon"
-    for slug, repo in ABLATION_REPOS.items():
+    for slug, repo in ABLATION_CHECKPOINTS.items():
         for run in range(n_runs):
             stem = f"recon_{slug}"
             out = d / f"{stem}_{ts}_r{run}.pt"
@@ -296,6 +323,8 @@ def build_eval_matrix(
             out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts,
             ade20k_res=ade20k_res, canvas_grids=canvas_grids,
         ))
+    if "ade20k-seg-ablations" in tasks:
+        jobs.extend(_ablation_seg_jobs(out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts))
     if "in1k-clf" in tasks:
         # Extra grids only expand frozen mode; finetuned weights were specialised
         # at one (scene, grid) and off-grid inference is a separate question.
@@ -342,7 +371,7 @@ class Args:
     out_dir: Path = Path("results")
     n_runs: int = 5
     n_timesteps: int = 21
-    tasks: list[TaskName] = field(default_factory=lambda: list(ALL_TASKS))
+    tasks: list[TaskName] = field(default_factory=lambda: list(DEFAULT_TASKS))
     dry_run: bool = False
     skip_existing: bool = False
     """Skip jobs whose structural output already exists (timestamp-agnostic glob match)."""
@@ -356,6 +385,17 @@ class Args:
     """Filter to these policies (empty = all). Applies to jobs that carry a policy field."""
     grids: list[int] = field(default_factory=list)
     """Filter to these canvas grids (empty = all). For DINOv3: grid = input_px // 16."""
+    shard: str = ""
+    """Run only one shard of the (sorted, filtered) job list: "k/N", 0-indexed,
+       strided as jobs[k::N]. For a SLURM array, pass "$SLURM_ARRAY_TASK_ID/<count>".
+       Applied before --skip-existing so the partition is stable across reruns."""
+
+
+def _apply_shard(jobs: list[EvalJob], spec: str) -> list[EvalJob]:
+    k_str, _, n_str = spec.partition("/")
+    k, n = int(k_str), int(n_str)
+    assert n >= 1 and 0 <= k < n, f"bad --shard {spec!r}: need 0 <= k < N, N >= 1"
+    return jobs[k::n]
 
 
 def main(args: Args) -> None:
@@ -367,6 +407,9 @@ def main(args: Args) -> None:
         max_batch_size=args.max_batch_size,
     )
     jobs = filter_jobs(jobs, policies=args.policies or None, grids=args.grids or None)
+    if args.shard:
+        jobs = _apply_shard(jobs, args.shard)
+        log.info("shard %s -> %d jobs", args.shard, len(jobs))
 
     n_total = len(jobs)
     if args.skip_existing:

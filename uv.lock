@@ -124,8 +124,8 @@ dev = [
 
 [[package]]
 name = "canvit-pytorch"
-version = "0.1.9"
-source = { git = "https://github.com/m2b3/CanViT-PyTorch.git#46f2be128dd784c4c141990216b952fbb16583a3" }
+version = "0.1.10"
+source = { git = "https://github.com/m2b3/CanViT-PyTorch.git#f4c813617e33420d82fcaab5d95ecb819988f7d0" }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "numpy" },
@@ -139,7 +139,7 @@ dependencies = [
 [[package]]
 name = "canvit-specialize"
 version = "0.1.0"
-source = { git = "https://github.com/m2b3/CanViT-specialize.git#eeca995d6cdcb49c37dec15d15f838de93e3dd9d" }
+source = { git = "https://github.com/m2b3/CanViT-specialize.git#ff9e4f8903bf05adc8076b33a76b8976abbde4ca" }
 dependencies = [
     { name = "canvit-pytorch" },
     { name = "comet-ml" },
@@ -148,7 +148,6 @@ dependencies = [
     { name = "matplotlib" },
     { name = "pandas" },
     { name = "pillow" },
-    { name = "pypatree" },
     { name = "safetensors" },
     { name = "scikit-learn" },
     { name = "timm" },
