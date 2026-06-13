@@ -232,6 +232,25 @@ def test_ablation_seg_pairs_model_and_probe_by_slug():
         assert j.output.parent.name == "ade20k_seg_ablations"
 
 
+def test_in1k_clf_ablation_jobs_pin_model_and_use_frozen_fused_head():
+    """C2F-only, frozen mode, model pinned per variant; the IN1k head is the
+    shared fused DINOv3 probe (default --probe-repo), so model is the only thing
+    that varies. The CLI defaults the model to the flagship, so the pin matters."""
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21,
+                             tasks=["in1k-clf-ablations"])
+    assert len(jobs) == 12 * 10  # 12 variants x n=10 (C2F is stochastic)
+    for j in jobs:
+        assert j.policy == "coarse_to_fine"
+        assert "--mode" in j.args and j.args[j.args.index("--mode") + 1] == "frozen"
+        model_repo = j.args[j.args.index("--episode.model-repo") + 1]
+        slug = next(s for s, r in ABLATION_CHECKPOINTS.items() if r == model_repo)
+        assert j.model == f"abl-{slug}"
+        # No per-model probe: the shared DINOv3 probe is the task default.
+        assert "--probe-repo" not in j.args
+        assert j.output.parent.name == "in1k_clf_ablations"
+        assert j.scene_size == 512 and j.canvas_grid == 32
+
+
 def test_ablation_seg_deterministic_policies_run_once():
     jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21,
                              tasks=["ade20k-seg-ablations"])
