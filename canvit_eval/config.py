@@ -11,14 +11,13 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from canvit_pytorch import resolve_canvit_repo
+from canvit_pytorch.checkpoints import FLAGSHIP_PRETRAIN_REPO
 
 from canvit_eval.policies import PolicyName
 
 log = logging.getLogger(__name__)
 
-# Pretrained CanViT-B repo (IN21k, additive canvas, VPE, DINOv3-B/16 teacher).
-DEFAULT_PRETRAINED_REPO = resolve_canvit_repo("canvitb16-add-vpe-pretrain-g128px-s512px-in21k-dv3b16-2026-02-02")
+DEFAULT_PRETRAINED_REPO = FLAGSHIP_PRETRAIN_REPO
 
 # DINOv3 teacher repos (public, third-party — no resolve wrap).
 DINOV3_VITB_REPO = "facebook/dinov3-vitb16-pretrain-lvd1689m"
