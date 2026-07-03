@@ -5,6 +5,7 @@ from pathlib import Path
 from canvit_pytorch.checkpoints import (
     ABLATION_CHECKPOINTS,
     ABLATION_MODEL_SHORTS,
+    PRETRAIN_CHECKPOINTS,
     ade20k_probe_repo,
 )
 
@@ -248,6 +249,25 @@ def test_in1k_clf_ablation_jobs_pin_model_and_use_frozen_fused_head():
         # No per-model probe: the shared DINOv3 probe is the task default.
         assert "--probe-repo" not in j.args
         assert j.output.parent.name == "in1k_clf_ablations"
+        assert j.scene_size == 512 and j.canvas_grid == 32
+
+
+def test_in1k_clf_pretrain_covers_only_in21k_and_in1k():
+    """The dataset-scale comparison (IN21k flagship vs IN1k-only) must pin exactly
+    those two pretraining checkpoints and EXCLUDE sa1b (also in PRETRAIN_CHECKPOINTS
+    but abandoned / different scene resolution). Frozen, fused shared DINOv3 probe."""
+    n = 4
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=n, n_timesteps=21,
+                             tasks=["in1k-clf-pretrain"])
+    # 2 datasets x (4 stochastic x n + 1 deterministic RFS x 1).
+    assert len(jobs) == 2 * (4 * n + 1)
+    pinned = {j.args[j.args.index("--episode.model-repo") + 1] for j in jobs}
+    assert pinned == {PRETRAIN_CHECKPOINTS["in21k"], PRETRAIN_CHECKPOINTS["in1k"]}
+    assert PRETRAIN_CHECKPOINTS["sa1b"] not in pinned  # explicit: sa1b is out of scope
+    for j in jobs:
+        assert j.args[j.args.index("--mode") + 1] == "frozen"
+        assert "--probe-repo" not in j.args  # shared DINOv3 probe is the default
+        assert j.output.parent.name == "in1k_clf_pretrain"
         assert j.scene_size == 512 and j.canvas_grid == 32
 
 

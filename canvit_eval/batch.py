@@ -22,6 +22,7 @@ from canvit_pytorch import resolve_canvit_repo
 from canvit_pytorch.checkpoints import (
     ABLATION_CHECKPOINTS,
     ABLATION_MODEL_SHORTS,
+    PRETRAIN_CHECKPOINTS,
     ade20k_dinov3_probe_name,
     ade20k_probe_repo,
 )
@@ -109,7 +110,7 @@ def _probe_repo(scene: int, grid: int) -> str:
     return ade20k_probe_repo("in21k", scene=scene, grid=grid)
 
 
-TaskName = Literal["ade20k-seg", "ade20k-seg-ablations", "in1k-clf", "in1k-clf-ablations", "recon"]
+TaskName = Literal["ade20k-seg", "ade20k-seg-ablations", "in1k-clf", "in1k-clf-ablations", "in1k-clf-pretrain", "recon"]
 # Paper-v1 matrix; ade20k-seg-ablations is opt-in so existing invocations
 # don't silently grow.
 DEFAULT_TASKS: list[TaskName] = ["ade20k-seg", "in1k-clf", "recon"]
@@ -313,6 +314,49 @@ def _in1k_clf_ablation_jobs(
     return jobs
 
 
+def _in1k_clf_pretrain_jobs(
+    out_dir: Path, *, n_runs: int, n_timesteps: int, ts: str,
+    max_batch_size: int | None,
+) -> list[EvalJob]:
+    """Frozen IN1k classification for each pretraining-dataset checkpoint
+    (IN21k flagship vs IN1k-only), for the IN1k-vs-IN21k dataset-scale comparison.
+
+    Same frozen protocol as the flagship (scene 512, canvas 32, fused SHARED
+    DINOv3 probe); only the model differs, pinned per PRETRAIN_CHECKPOINTS entry.
+    Both checkpoints share the flagship canvas_dim, so the shared probe fuses for
+    each. Machine-agnostic: runs anywhere IMAGENET_VAL resolves — an H100 fits
+    bs=64; on a 24 GB card pass --max-batch-size (e.g. 16), since top-1 is
+    batch-invariant.
+    """
+    jobs: list[EvalJob] = []
+    d = out_dir / "in1k_clf_pretrain"
+    scene, grid, bs = _cap_batch_sizes([IN1K_RESOLUTIONS[0]], max_batch_size)[0]
+    # Only the IN21k-flagship vs IN1k-only dataset-scale comparison. sa1b (also in
+    # PRETRAIN_CHECKPOINTS) is out of scope — abandoned continued-pretrain at a
+    # different scene resolution.
+    for short in ("in21k", "in1k"):
+        model_repo = PRETRAIN_CHECKPOINTS[short]
+        for policy in IN1K_POLICIES:
+            for run in range(_n_runs_for(policy, n_runs)):
+                stem = f"pretrain-{short}_{policy}_s{scene}_c{grid}"
+                out = d / f"{stem}_{ts}_r{run}.pt"
+                jobs.append(EvalJob(
+                    task="in1k-clf-pretrain",
+                    args=["in1k-clf", "--mode", "frozen",
+                          "--episode.model-repo", model_repo,
+                          "--scene-size", str(scene),
+                          "--batch-size", str(bs),
+                          "--episode.policy", policy,
+                          "--episode.canvas-grid", str(grid),
+                          "--episode.n-timesteps", str(n_timesteps),
+                          "--output", str(out)],
+                    output=out, output_stem=f"{stem}_",
+                    model=f"pretrain-{short}", policy=policy,
+                    scene_size=scene, canvas_grid=grid, run_idx=run,
+                ))
+    return jobs
+
+
 def _recon_jobs(out_dir: Path, *, n_runs: int, ts: str) -> list[EvalJob]:
     jobs: list[EvalJob] = []
     d = out_dir / "recon"
@@ -363,6 +407,10 @@ def build_eval_matrix(
         jobs.extend(_ablation_seg_jobs(out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts))
     if "in1k-clf-ablations" in tasks:
         jobs.extend(_in1k_clf_ablation_jobs(out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts))
+    if "in1k-clf-pretrain" in tasks:
+        jobs.extend(_in1k_clf_pretrain_jobs(
+            out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts,
+            max_batch_size=max_batch_size))
     if "in1k-clf" in tasks:
         # Extra grids only expand frozen mode; finetuned weights were specialised
         # at one (scene, grid) and off-grid inference is a separate question.
