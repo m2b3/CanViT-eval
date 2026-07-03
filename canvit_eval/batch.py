@@ -110,7 +110,7 @@ def _probe_repo(scene: int, grid: int) -> str:
     return ade20k_probe_repo("in21k", scene=scene, grid=grid)
 
 
-TaskName = Literal["ade20k-seg", "ade20k-seg-ablations", "in1k-clf", "in1k-clf-ablations", "in1k-clf-pretrain", "recon"]
+TaskName = Literal["ade20k-seg", "ade20k-seg-ablations", "ade20k-seg-pretrain", "in1k-clf", "in1k-clf-ablations", "in1k-clf-pretrain", "recon"]
 # Paper-v1 matrix; ade20k-seg-ablations is opt-in so existing invocations
 # don't silently grow.
 DEFAULT_TASKS: list[TaskName] = ["ade20k-seg", "in1k-clf", "recon"]
@@ -357,6 +357,49 @@ def _in1k_clf_pretrain_jobs(
     return jobs
 
 
+# Scene-512 grids we train IN1k-only ADE20K probes for (c32 native, c64 headline).
+_SEG_PRETRAIN_RES: list[tuple[int, int, int]] = [(512, 32, 32), (512, 64, 8)]
+
+
+def _ade20k_seg_pretrain_jobs(
+    out_dir: Path, *, n_runs: int, n_timesteps: int, ts: str,
+    max_batch_size: int | None,
+) -> list[EvalJob]:
+    """ADE20K seg for each pretraining-dataset checkpoint (IN21k flagship vs IN1k-only),
+    at scene 512, canvas 32 and 64, full policy matrix.
+
+    Unlike clf there is no shared fused head: each model needs its OWN ADE20K probe. Both
+    the model AND the probe are pinned per PRETRAIN_CHECKPOINTS entry — model = the repo,
+    probe = probe-ade20k-40k-s512-c{grid}-{short}. The in21k arm reuses the existing
+    flagship probes (so it doubles as a seg faithfulness check vs the paper); the in1k arm
+    uses the probes trained for step-1837056. sa1b excluded (out of scope).
+    """
+    jobs: list[EvalJob] = []
+    d = out_dir / "ade20k_seg_pretrain"
+    for scene, grid, bs in _cap_batch_sizes(_SEG_PRETRAIN_RES, max_batch_size):
+        for short in ("in21k", "in1k"):
+            model_repo = PRETRAIN_CHECKPOINTS[short]
+            probe = ade20k_probe_repo(short, scene=scene, grid=grid)
+            for policy in ALL_POLICIES:
+                if not _policy_runs_on_grid(policy, grid):
+                    continue
+                for run in range(_n_runs_for(policy, n_runs)):
+                    stem = f"pretrain-{short}_{policy}_s{scene}_c{grid}"
+                    out = d / f"{stem}_{ts}_r{run}.pt"
+                    jobs.append(EvalJob(
+                        task="ade20k-seg-pretrain",
+                        args=["ade20k-seg-canvit", "--probe-repo", probe,
+                              "--episode.model-repo", model_repo,
+                              "--episode.policy", policy, "--episode.n-timesteps", str(n_timesteps),
+                              "--episode.canvas-grid", str(grid), "--scene-size", str(scene),
+                              "--batch-size", str(bs), "--output", str(out)],
+                        output=out, output_stem=f"{stem}_",
+                        model=f"pretrain-{short}", policy=policy,
+                        scene_size=scene, canvas_grid=grid, run_idx=run,
+                    ))
+    return jobs
+
+
 def _recon_jobs(out_dir: Path, *, n_runs: int, ts: str) -> list[EvalJob]:
     jobs: list[EvalJob] = []
     d = out_dir / "recon"
@@ -409,6 +452,10 @@ def build_eval_matrix(
         jobs.extend(_in1k_clf_ablation_jobs(out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts))
     if "in1k-clf-pretrain" in tasks:
         jobs.extend(_in1k_clf_pretrain_jobs(
+            out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts,
+            max_batch_size=max_batch_size))
+    if "ade20k-seg-pretrain" in tasks:
+        jobs.extend(_ade20k_seg_pretrain_jobs(
             out_dir, n_runs=n_runs, n_timesteps=n_timesteps, ts=ts,
             max_batch_size=max_batch_size))
     if "in1k-clf" in tasks:
