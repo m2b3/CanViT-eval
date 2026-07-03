@@ -271,6 +271,24 @@ def test_in1k_clf_pretrain_covers_only_in21k_and_in1k():
         assert j.scene_size == 512 and j.canvas_grid == 32
 
 
+def test_ade20k_seg_pretrain_pairs_model_and_own_probe():
+    """Seg (unlike clf) has no shared fused head — each model needs its OWN ADE20K probe.
+    The IN21k-vs-IN1k comparison must pin each model AND probe-ade20k-40k-s512-c{grid}-{short}
+    at grids 32 and 64, and exclude sa1b."""
+    jobs = build_eval_matrix(Path("/tmp/test"), n_runs=5, n_timesteps=21,
+                             tasks=["ade20k-seg-pretrain"])
+    assert {j.model for j in jobs} == {"pretrain-in21k", "pretrain-in1k"}
+    assert {j.canvas_grid for j in jobs} == {32, 64}
+    for j in jobs:
+        short = "in1k" if j.model == "pretrain-in1k" else "in21k"
+        model_repo = j.args[j.args.index("--episode.model-repo") + 1]
+        probe_repo = j.args[j.args.index("--probe-repo") + 1]
+        assert model_repo == PRETRAIN_CHECKPOINTS[short]
+        assert probe_repo == ade20k_probe_repo(short, scene=512, grid=j.canvas_grid)
+        assert j.output.parent.name == "ade20k_seg_pretrain"
+    assert all(PRETRAIN_CHECKPOINTS["sa1b"] not in j.args for j in jobs)
+
+
 def test_ablation_seg_deterministic_policies_run_once():
     jobs = build_eval_matrix(Path("/tmp/test"), n_runs=10, n_timesteps=21,
                              tasks=["ade20k-seg-ablations"])
