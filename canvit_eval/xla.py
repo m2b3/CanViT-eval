@@ -14,7 +14,9 @@ Lazy-tensor constraints this module exists for:
 from pathlib import Path
 
 import torch
+from canvit_pytorch import Viewpoint
 from canvit_specialize.metrics import mIoUAccumulator
+from torch import Tensor
 
 
 def resolve_device(device_str: str) -> torch.device:
@@ -66,6 +68,76 @@ def make_miou_accumulator(
     if device.type == "xla":
         return StaticShapeMIoUAccumulator(num_classes, ignore_index, device)
     return mIoUAccumulator(num_classes, ignore_index, device)
+
+
+def _lerp_gather(x: Tensor, coords: Tensor, dim: int) -> Tensor:
+    """Bilinear interpolation along `dim` of x at fractional pixel `coords`.
+
+    x: [B, C, H, W]; coords: [B, S] pixel coordinates along dim. Out-of-range
+    contributions get zero weight (grid_sample zeros-padding semantics).
+    Gather-based: static shapes, native XLA lowering.
+    """
+    size = x.shape[dim]
+    i0 = coords.floor()
+    w1 = (coords - i0).to(x.dtype)
+    w0 = 1.0 - w1
+    i0l = i0.long()
+    i1l = i0l + 1
+    ok0 = ((i0l >= 0) & (i0l < size)).to(x.dtype)
+    ok1 = ((i1l >= 0) & (i1l < size)).to(x.dtype)
+    idx0 = i0l.clamp(0, size - 1)
+    idx1 = i1l.clamp(0, size - 1)
+
+    B, S = coords.shape
+    shape = [1] * x.ndim
+    shape[0] = B
+    shape[dim] = S
+    expand = list(x.shape)
+    expand[dim] = S
+
+    def take(idx: Tensor) -> Tensor:
+        return torch.gather(x, dim, idx.view(shape).expand(expand))
+
+    return take(idx0) * (w0 * ok0).view(shape) + take(idx1) * (w1 * ok1).view(shape)
+
+
+def sample_at_viewpoint_xla(*, spatial: Tensor, viewpoint: Viewpoint, glimpse_size_px: int) -> Tensor:
+    """XLA-native equivalent of canvit_pytorch.sample_at_viewpoint.
+
+    F.grid_sample has no XLA lowering — the aten::grid_sampler_2d CPU
+    fallback pulls the full image batch device->host every timestep (~100 MB
+    at bs=32 s512; measured 15.8 s of transfer over 2 batches). The sampling
+    grid is axis-aligned (centers + scales * cell-center offsets), so the
+    bilinear sample separates into two 1-D lerp-gathers. Matches
+    sample_at_viewpoint within fp32 rounding (max abs diff 7.2e-7 over
+    random viewpoints at 128 px and 32 px; test_xla_sampler.py).
+    """
+    B, _, H, W = spatial.shape
+    S = glimpse_size_px
+    offs = ((torch.arange(S, device=spatial.device, dtype=torch.float32) + 0.5) / S) * 2 - 1
+    ny = viewpoint.centers[:, 0:1] + viewpoint.scales[:, None] * offs[None, :]
+    nx = viewpoint.centers[:, 1:2] + viewpoint.scales[:, None] * offs[None, :]
+    # align_corners=False: pixel = ((n + 1) * size - 1) / 2
+    py = ((ny + 1.0) * H - 1.0) / 2.0
+    px = ((nx + 1.0) * W - 1.0) / 2.0
+    x = spatial.float()
+    x = _lerp_gather(x, py, dim=2)
+    x = _lerp_gather(x, px, dim=3)
+    return x.to(spatial.dtype)
+
+
+def host_pin_standardizer_flags(model: torch.nn.Module) -> None:
+    """Move PositionAwareStandardizer._initialized buffers to CPU.
+
+    The `initialized` property does `.item()` inside every forward — on XLA
+    that is one blocking device->host transfer per glimpse-step (measured
+    aten::_local_scalar_dense == n_timesteps per batch). The flag is a
+    load-time constant; on CPU the `.item()` is free. No-op elsewhere."""
+    from canvit_pytorch.standardizers import PositionAwareStandardizer
+
+    for module in model.modules():
+        if isinstance(module, PositionAwareStandardizer):
+            module._initialized = module._initialized.cpu()
 
 
 def dump_metrics_report(device: torch.device, output: Path) -> None:

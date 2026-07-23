@@ -31,7 +31,9 @@ from tqdm import tqdm
 from canvit_eval.config import EpisodeConfig, TEACHER_REPO, ade20k_root, require_existing_dir
 from canvit_eval.runner import eval_batches
 from canvit_eval.tasks.base import TaskConfig
-from canvit_eval.xla import dump_metrics_report, make_miou_accumulator, resolve_device, sync_if_xla
+from canvit_eval.xla import (
+    dump_metrics_report, host_pin_standardizer_flags, make_miou_accumulator, resolve_device, sync_if_xla,
+)
 
 log = logging.getLogger(__name__)
 
@@ -127,6 +129,8 @@ def run_canvit(cfg: CanViTConfig) -> Path:
         pretrained_repo=cfg.episode.model_repo,
         probe_repo=cfg.probe_repo,
     ).to(device).eval()
+    if device.type == "xla":
+        host_pin_standardizer_flags(seg)
     probe = seg.head
 
     canvas_grid = cfg.episode.canvas_grid or cfg.scene_size // seg.canvit.backbone.patch_size_px
