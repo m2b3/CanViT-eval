@@ -6,6 +6,8 @@ from typing import Protocol
 from canvit_pytorch import CanViTOutput, RecurrentState, Viewpoint, sample_at_viewpoint
 from torch import Tensor
 
+from canvit_eval.xla import sync_if_xla
+
 
 class CanViTModel(Protocol):
     def init_state(self, *, batch_size: int, canvas_grid_size: int) -> RecurrentState: ...
@@ -45,5 +47,8 @@ def run_episode(
         out = model(glimpse=glimpse, state=state, viewpoint=vp)
         state = out.state
         steps.append(EpisodeStep(t=t, state=state, output=out, viewpoint=vp))
+        # On XLA, cut the lazy graph per timestep: shapes are static across t,
+        # so one compiled step-graph is reused instead of one 21-step megagraph.
+        sync_if_xla(images.device)
 
     return steps

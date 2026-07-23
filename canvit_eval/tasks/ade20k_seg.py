@@ -31,6 +31,7 @@ from tqdm import tqdm
 from canvit_eval.config import EpisodeConfig, TEACHER_REPO, ade20k_root, require_existing_dir
 from canvit_eval.runner import eval_batches
 from canvit_eval.tasks.base import TaskConfig
+from canvit_eval.xla import dump_metrics_report, make_miou_accumulator, resolve_device, sync_if_xla
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ class ADE20kBaseConfig(TaskConfig):
     ade20k_root: Path = field(default_factory=ade20k_root)
     scene_size: int = 512
     resize_mode: ResizeMode = "squish"
+    limit_images: int | None = None
+    """Evaluate only the first N validation images (smoke tests). None = full set."""
 
 
 @dataclass(kw_only=True)
@@ -74,9 +77,11 @@ def _loader(cfg: ADE20kBaseConfig) -> DataLoader:
         root=cfg.ade20k_root, split="validation",
         img_transform=img_tf, mask_transform=mask_tf,
     )
+    if cfg.limit_images is not None:
+        dataset = torch.utils.data.Subset(dataset, range(min(cfg.limit_images, len(dataset))))
     return DataLoader(
         dataset, batch_size=cfg.batch_size, shuffle=False,
-        num_workers=cfg.num_workers, pin_memory=True,
+        num_workers=cfg.num_workers, pin_memory=cfg.device.startswith("cuda"),
     )
 
 
@@ -115,7 +120,7 @@ def run_canvit(cfg: CanViTConfig) -> Path:
     `acc.compute()` loop after the full dataset is processed.
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    device = torch.device(cfg.device)
+    device = resolve_device(cfg.device)
     require_existing_dir(cfg.ade20k_root, description="ADE20K root", env_var="ADE20K_ROOT")
 
     seg = CanViTForSemanticSegmentation.from_pretrained_with_probe(
@@ -128,7 +133,7 @@ def run_canvit(cfg: CanViTConfig) -> Path:
     loader = _loader(cfg)
     T = cfg.episode.n_timesteps
 
-    accs = [mIoUAccumulator(NUM_CLASSES, IGNORE_LABEL, device) for _ in range(T)]
+    accs = [make_miou_accumulator(NUM_CLASSES, IGNORE_LABEL, device) for _ in range(T)]
     t_start = time.monotonic()
     n_images = 0
     policy_kwargs = {"probe": probe, "get_spatial_fn": seg.canvit.get_spatial} \
@@ -146,8 +151,10 @@ def run_canvit(cfg: CanViTConfig) -> Path:
         for step in br.steps:
             spatial = seg.canvit.get_spatial(step.state.canvas).view(B, canvas_grid, canvas_grid, -1)
             _update_miou(accs[step.t], probe, spatial, masks)
+        sync_if_xla(device)
 
     mious = {f"t{t}": acc.compute() for t, acc in enumerate(accs)}
+    dump_metrics_report(device, cfg.output)
     wall = time.monotonic() - t_start
     _save(cfg.output, mious, cfg, {
         "n_images": n_images,
