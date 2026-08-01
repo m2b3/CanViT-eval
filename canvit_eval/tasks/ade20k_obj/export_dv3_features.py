@@ -11,9 +11,8 @@ import tyro
 from canvit_pytorch.teacher import load_teacher
 from canvit_specialize.datasets.ade20k import ADE20kDataset, ResizeMode, make_val_transforms
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from canvit_eval.config import TEACHER_REPO, ade20k_root, require_existing_dir
+from canvit_eval.config import TEACHER_REPO, ade20k_root, progress, require_existing_dir
 from canvit_eval.provenance import device_info, provenance
 from canvit_eval.tasks.ade20k_obj.paths import EXPECTED_N_VAL_IMAGES, FEATURES_DIR, features_path
 
@@ -103,7 +102,7 @@ def main(cfg: ExportFeaturesConfig) -> None:
     batch_start = 0
     t0 = time.monotonic()
     with torch.inference_mode(), torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=cfg.amp):
-        for images, masks in tqdm(loader, desc="export", total=len(loader)):
+        for images, masks in progress(loader, desc="export", total=len(loader)):
             B = images.shape[0]
             assert images.shape[1:] == (3, cfg.scene_size_px, cfg.scene_size_px), images.shape
             assert masks.shape[-2:] == (cfg.scene_size_px, cfg.scene_size_px), masks.shape

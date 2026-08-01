@@ -26,9 +26,8 @@ from canvit_specialize.metrics import mIoUAccumulator
 from canvit_specialize.training.utils import collect_metadata
 from torch import Tensor
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from canvit_eval.config import EpisodeConfig, TEACHER_REPO, ade20k_root, require_existing_dir
+from canvit_eval.config import EpisodeConfig, TEACHER_REPO, ade20k_root, progress, require_existing_dir
 from canvit_eval.runner import eval_batches
 from canvit_eval.tasks.base import TaskConfig
 
@@ -177,7 +176,7 @@ def run_dinov3(cfg: DINOv3Config) -> Path:
     amp_dtype = torch.bfloat16 if cfg.amp else torch.float32
 
     with torch.inference_mode(), torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=cfg.amp):
-        for images, masks in tqdm(loader, desc="Evaluating"):
+        for images, masks in progress(loader, desc="Evaluating"):
             images = images.to(device, non_blocking=True)
             masks = masks.to(device, non_blocking=True)
             B = images.shape[0]

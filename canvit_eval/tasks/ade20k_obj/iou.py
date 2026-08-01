@@ -24,9 +24,8 @@ from canvit_specialize.datasets.ade20k import (
     IGNORE_LABEL, NUM_CLASSES, ADE20kDataset, ResizeMode, make_val_transforms,
 )
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from canvit_eval.config import EpisodeConfig, ade20k_root, require_existing_dir
+from canvit_eval.config import EpisodeConfig, ade20k_root, progress, require_existing_dir
 from canvit_eval.policies import is_power_of_two
 from canvit_eval.provenance import device_info, provenance
 from canvit_eval.runner import eval_batches
@@ -211,7 +210,7 @@ def run_dinov3(cfg: DINOv3Config) -> Path:
         union_all = torch.zeros(n_images, n_classes)
         gt_area_all = torch.zeros(n_images, n_classes)
 
-        for start in tqdm(range(0, n_images, cfg.batch_size), desc=f"{res_px}px", leave=False):
+        for start in progress(range(0, n_images, cfg.batch_size), desc=f"{res_px}px", leave=False):
             end = min(start + cfg.batch_size, n_images)
             feats = feats_all[start:end].to(device)
             masks = masks_all[start:end].to(device).long()
@@ -314,7 +313,7 @@ def _run_one_canvas(canvas_grid: int, cfg: CanViTConfig, device: torch.device) -
     gt_area_all = torch.zeros(n_images, n_classes)  # GT area is timestep-invariant
 
     img_start = 0
-    for br in tqdm(
+    for br in progress(
         eval_batches(
             model=seg.canvit, loader=loader, episode_cfg=episode_cfg,
             canvas_grid=canvas_grid, device=device, amp=cfg.amp,

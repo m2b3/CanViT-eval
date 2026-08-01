@@ -13,11 +13,10 @@ from canvit_pytorch.preprocess import preprocess
 from PIL import Image
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
 
 from canvit_specialize.training.utils import collect_metadata
 
-from canvit_eval.config import TEACHER_REPO, EpisodeConfig, require_existing_dir
+from canvit_eval.config import TEACHER_REPO, EpisodeConfig, progress, require_existing_dir
 from canvit_eval.runner import eval_batches, load_model
 from canvit_eval.tasks.base import TaskConfig
 
@@ -89,7 +88,7 @@ def evaluate(cfg: Config) -> Path:
         t_patches, t_cls = cached["patches"], cached["cls"]
     else:
         plist, clist = [], []
-        for batch in tqdm(loader, desc="Teacher"):
+        for batch in progress(loader, desc="Teacher"):
             feats = teacher.forward_norm_features(batch[0].to(device))
             plist.append(feats.patches.cpu())
             clist.append(feats.cls.cpu())

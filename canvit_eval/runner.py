@@ -9,9 +9,8 @@ import torch
 from canvit_pytorch.model.pretraining.hub import CanViTForPretrainingHFHub
 from torch import Tensor
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
-from canvit_eval.config import EpisodeConfig
+from canvit_eval.config import EpisodeConfig, progress
 from canvit_eval.episode import CanViTModel, EpisodeStep, run_episode
 from canvit_eval.policies import make_policy
 
@@ -46,7 +45,7 @@ def eval_batches(
     kw = policy_kwargs or {}
 
     with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=amp):
-        for batch in tqdm(loader, desc="Evaluating"):
+        for batch in progress(loader, desc="Evaluating"):
             images = batch[0].to(device, non_blocking=True)
             B = images.shape[0]
 

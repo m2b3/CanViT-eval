@@ -12,10 +12,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from canvit_pytorch.checkpoints import FLAGSHIP_PRETRAIN_REPO
+from tqdm import tqdm
 
 from canvit_eval.policies import PolicyName
 
 log = logging.getLogger(__name__)
+
+
+def progress(iterable, **kw):
+    """tqdm, silent when stderr is not a terminal.
+
+    `disable=None` is tqdm's own auto mode and is not the same as
+    `disable=False`, which is what a bare tqdm() does.
+    """
+    return tqdm(iterable, disable=None, **kw)
 
 DEFAULT_PRETRAINED_REPO = FLAGSHIP_PRETRAIN_REPO
 
